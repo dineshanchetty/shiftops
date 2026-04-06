@@ -1,5 +1,6 @@
 name: ShiftOps CI/CD
 
+# SCM basic auth re-enabled + fresh publish profile credentials
 on:
   push:
     branches: [main]
