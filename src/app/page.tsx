@@ -135,14 +135,18 @@ export default async function RootPage() {
             {/* App mockup content */}
             <div className="flex">
               {/* Sidebar mock */}
-              <div className="hidden sm:block w-48 bg-[var(--color-base-800)] p-4 min-h-[320px]">
+              <div className="hidden sm:block w-48 bg-gray-900 p-4 min-h-[320px]">
                 <div className="text-white font-bold text-sm mb-6">ShiftOps</div>
-                <div className="space-y-1">
-                  {["Dashboard", "Roster", "Cashup", "Staff", "Reports", "Settings"].map((item, i) => (
-                    <div key={item} className={`px-3 py-2 rounded-lg text-xs font-medium ${i === 0 ? "bg-[var(--color-accent)] text-white" : "text-gray-400"}`}>
-                      {item}
-                    </div>
-                  ))}
+                <div className="space-y-0.5 text-xs">
+                  <div className="px-3 py-2 rounded-lg font-medium border-l-[3px] border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-white">Dashboard</div>
+                  <div className="px-3 py-2 text-gray-400 hover:text-gray-300">Roster</div>
+                  <div className="px-3 py-2 text-gray-400 hover:text-gray-300">Cashup</div>
+                  <div className="px-3 py-2 text-gray-400 hover:text-gray-300">Staff</div>
+                  <div className="px-3 py-2 text-gray-400 hover:text-gray-300">Reports</div>
+                  <div className="px-3 py-2 text-gray-400 hover:text-gray-300">Settings</div>
+                </div>
+                <div className="absolute bottom-4 left-4 right-4">
+                  <div className="text-[10px] text-gray-500">Johns Takeaways</div>
                 </div>
               </div>
               {/* Content mock */}
