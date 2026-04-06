@@ -11,9 +11,9 @@ import {
   saveFieldMappings,
   loadFieldMappings,
   parseSampleCsvHeaders,
-  SHIFTOPS_FIELDS,
 } from "./actions";
-import type { FieldMapping } from "./actions";
+import { SHIFTOPS_FIELDS } from "@/lib/aura-constants";
+import type { FieldMapping } from "@/lib/aura-constants";
 
 export default function AuraMappingPage() {
   const [mappings, setMappings] = useState<Record<string, string>>({});

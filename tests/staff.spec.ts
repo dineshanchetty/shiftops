@@ -26,20 +26,34 @@ test.describe("Staff", () => {
     await page.waitForLoadState("networkidle");
   });
 
-  test("Staff page renders with table", async ({ page }) => {
+  test("Staff page renders with table or empty state", async ({ page }) => {
+    // Wait for the page heading to confirm we are on the staff page
     await expect(
-      page.getByRole("heading", { name: /staff/i })
-    ).toBeVisible();
+      page.getByRole("heading", { level: 1, name: /staff/i })
+    ).toBeVisible({ timeout: 10_000 });
 
-    // Table should be present
+    // Wait for loading spinner to disappear
+    await expect(page.locator(".animate-spin")).toBeHidden({ timeout: 15_000 });
+
+    // Either a table is present (staff exist) or the empty state is shown
     const table = page.locator("table");
-    await expect(table).toBeVisible({ timeout: 10_000 });
+    const emptyState = page.getByText("No staff yet");
+
+    const tableVisible = await table.isVisible();
+    const emptyVisible = await emptyState.isVisible();
+
+    expect(tableVisible || emptyVisible).toBeTruthy();
   });
 
   test('"Invite Staff" button is present', async ({ page }) => {
+    // Wait for loading to complete
+    await expect(page.locator(".animate-spin")).toBeHidden({ timeout: 15_000 });
+
+    // The "Invite Staff" button is always present — either in the PageShell
+    // action bar (when staff exist) or in the empty state
     const inviteButton = page.getByRole("button", {
-      name: /invite|add staff/i,
-    });
+      name: /invite staff/i,
+    }).first();
     await expect(inviteButton).toBeVisible({ timeout: 10_000 });
   });
 

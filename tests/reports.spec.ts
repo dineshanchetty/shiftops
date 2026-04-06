@@ -58,14 +58,19 @@ test.describe("Reports", () => {
     await page.goto("/app/reports/daily-banking");
     await page.waitForLoadState("networkidle");
 
-    // Branch selector
-    const branchSelect = page.locator("select").first();
-    await expect(branchSelect).toBeVisible({ timeout: 10_000 });
+    // Branch selector is a custom dropdown button (not a <select>)
+    const branchButton = page.getByRole("button", {
+      name: /select branch|branch|all branches|\d+ branch/i,
+    });
+    await expect(branchButton).toBeVisible({ timeout: 10_000 });
 
-    // Date inputs (from/to range)
-    const dateInputs = page.locator('input[type="date"]');
-    const dateCount = await dateInputs.count();
-    expect(dateCount).toBeGreaterThanOrEqual(1);
+    // Period selector is a <select> with preset options (Today, This Week, etc.)
+    const periodSelect = page.locator("select").first();
+    await expect(periodSelect).toBeVisible({ timeout: 10_000 });
+
+    // Run Report button
+    const runButton = page.getByRole("button", { name: /run report/i });
+    await expect(runButton).toBeVisible();
   });
 
   test("Export CSV button is present", async ({ page }) => {

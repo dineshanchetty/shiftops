@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useTransition } from "react";
+import { useState, useCallback, useTransition, useEffect } from "react";
 import { format } from "date-fns";
 import {
   CheckCircle2,
@@ -46,22 +46,22 @@ export default function CashupPage() {
   const [formKey, setFormKey] = useState(0);
 
   // ─── Load branches on first mount ───────────────────────────────────
-  const loadBranches = useCallback(() => {
+  useEffect(() => {
     if (branchesLoaded) return;
     startTransition(async () => {
-      const b = await getUserBranches();
-      setBranches(b);
-      setBranchesLoaded(true);
-      if (b.length === 1) {
-        setBranchId(b[0].id);
+      try {
+        const b = await getUserBranches();
+        setBranches(b);
+        if (b.length === 1) {
+          setBranchId(b[0].id);
+        }
+      } catch (e) {
+        console.error("Failed to load branches:", e);
+      } finally {
+        setBranchesLoaded(true);
       }
     });
   }, [branchesLoaded]);
-
-  // Trigger on mount
-  if (!branchesLoaded) {
-    loadBranches();
-  }
 
   // ─── Load cashup data ──────────────────────────────────────────────
   const handleLoad = useCallback(() => {
