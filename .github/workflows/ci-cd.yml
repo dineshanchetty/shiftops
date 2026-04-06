@@ -28,19 +28,17 @@ jobs:
       - run: npm run build
 
       # Deploy to Azure on push to main
-      # Package everything needed to run (pre-built, no Azure build)
+      # Package standalone output (self-contained, ~15MB)
       - name: Create deployment package
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          zip -r deploy.zip \
-            package.json \
-            package-lock.json \
-            next.config.mjs \
-            node_modules/ \
-            .next/ \
-            public/ \
-            src/ \
-            -x "node_modules/.cache/*" ".next/cache/*"
+          # Copy static + public into standalone
+          cp -r .next/static .next/standalone/.next/static
+          cp -r public .next/standalone/public 2>/dev/null || true
+          # Create zip from standalone dir
+          cd .next/standalone
+          zip -r ../../deploy.zip .
+          cd ../..
           echo "Package size: $(du -h deploy.zip | cut -f1)"
 
       - name: Deploy to Azure via Kudu ZIP
