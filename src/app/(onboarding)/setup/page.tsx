@@ -643,80 +643,23 @@ async function handleFinalSubmit(
     throw new Error("You must be logged in to complete setup.");
   }
 
-  // 1. Create tenant
-  const { data: tenant, error: tenantError } = await supabase
-    .from("tenants")
-    .insert({
-      name: companyData.companyName,
-      slug: companyData.slug,
-    })
-    .select("id")
-    .single();
-
-  if (tenantError) {
-    throw new Error(tenantError.message);
-  }
-
-  const tenantId = tenant.id;
-
-  // 2. Create tenant_member (owner)
-  const { error: memberError } = await supabase.from("tenant_members").insert({
-    tenant_id: tenantId,
-    user_id: user.id,
-    role: "owner",
+  // Use the setup_tenant RPC function which handles all inserts
+  // atomically with SECURITY DEFINER (bypasses RLS for onboarding)
+  const { data: tenantId, error } = await supabase.rpc("setup_tenant", {
+    p_name: companyData.companyName,
+    p_slug: companyData.slug,
+    p_user_id: user.id,
+    p_brands: brands,
+    p_branch_name: branchData.branchName,
+    p_branch_brand: branchData.brandId,
+    p_branch_address: branchData.address || null,
   });
 
-  if (memberError) {
-    throw new Error(memberError.message);
+  if (error) {
+    throw new Error(error.message);
   }
 
-  // 3. Insert brands
-  const brandInserts = brands.map((name) => ({
-    tenant_id: tenantId,
-    name,
-  }));
-
-  const { data: insertedBrands, error: brandsError } = await supabase
-    .from("brands")
-    .insert(brandInserts)
-    .select("id, name");
-
-  if (brandsError) {
-    throw new Error(brandsError.message);
-  }
-
-  // 4. Find the brand for the branch
-  const selectedBrand = insertedBrands?.find(
-    (b) => b.name === branchData.brandId
-  );
-
-  // 5. Insert branch
-  if (!selectedBrand) {
-    throw new Error("Could not find the selected brand.");
-  }
-  const { error: branchError } = await supabase.from("branches").insert({
-    tenant_id: tenantId,
-    brand_id: selectedBrand.id,
-    name: branchData.branchName,
-    address: branchData.address || null,
-  });
-
-  if (branchError) {
-    throw new Error(branchError.message);
-  }
-
-  // 6. Insert default positions
-  const defaultPositions = ["FOH", "BOH", "Driver", "Manager"];
-  const positionInserts = defaultPositions.map((name) => ({
-    tenant_id: tenantId,
-    name,
-  }));
-
-  const { error: positionsError } = await supabase
-    .from("positions")
-    .insert(positionInserts);
-
-  if (positionsError) {
-    throw new Error(positionsError.message);
+  if (!tenantId) {
+    throw new Error("Failed to create tenant. Please try again.");
   }
 }

@@ -27,6 +27,11 @@ export default async function AppLayout({
     .eq('user_id', user.id)
     .single();
 
+  // If user has no tenant, redirect to onboarding
+  if (!tenantMember) {
+    redirect('/setup');
+  }
+
   const tenant = (tenantMember?.tenant as { id: string; name: string; plan: string; logo_url: string | null } | null);
   const tenantName = tenant?.name ?? 'My Organization';
   const planName = tenant?.plan ?? 'free';
