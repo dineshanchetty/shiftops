@@ -36,6 +36,10 @@
 }
 
 @layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
   body {
     font-family: var(--font-body, "Inter", sans-serif);
     color: var(--color-base-900);

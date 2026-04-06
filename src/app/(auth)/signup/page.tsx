@@ -160,7 +160,11 @@ export default function SignupPage() {
         </button>
       </form>
 
-      <p className="mt-6 text-center text-sm text-[var(--color-base-400)]">
+      <p className="mt-4 text-center text-xs text-[var(--color-base-400)]">
+        14-day free trial. No credit card required.
+      </p>
+
+      <p className="mt-4 text-center text-sm text-[var(--color-base-400)]">
         Already have an account?{" "}
         <Link
           href="/login"
