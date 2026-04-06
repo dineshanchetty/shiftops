@@ -114,7 +114,7 @@ export function Sidebar({
                       className={cn(
                         'flex items-center gap-3 px-5 py-2 text-sm transition-colors',
                         isActive
-                          ? 'border-l-[3px] border-orange-500 bg-orange-500/10 text-white pl-[17px]'
+                          ? 'border-l-[3px] border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-white pl-[17px]'
                           : 'border-l-[3px] border-transparent text-gray-400 hover:text-white hover:bg-white/5 pl-[17px]'
                       )}
                     >
@@ -136,14 +136,14 @@ export function Sidebar({
           <div className="min-w-0">
             <p className="text-sm font-medium truncate">{tenantName}</p>
           </div>
-          <span className="shrink-0 rounded-full bg-orange-500/20 text-orange-400 px-2 py-0.5 text-[10px] font-semibold uppercase">
+          <span className="shrink-0 rounded-full bg-[var(--color-accent-soft)] text-[var(--color-accent)] px-2 py-0.5 text-[10px] font-semibold uppercase">
             {planName}
           </span>
         </div>
 
         {/* User + logout */}
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-orange-500 text-xs font-semibold text-white shrink-0">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--color-accent)] text-xs font-semibold text-white shrink-0">
             {getInitials(userName)}
           </div>
           <p className="text-sm text-gray-300 truncate flex-1">{userName}</p>

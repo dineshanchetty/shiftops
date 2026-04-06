@@ -41,7 +41,7 @@ export default async function RootPage() {
           <div className="flex items-center gap-2">
             <span className="font-[var(--font-display)] text-xl font-bold tracking-tight">
               <span className="text-[var(--color-base-900)]">Shift</span>
-              <span className="text-[#F5A623]">Ops</span>
+              <span className="text-[var(--color-accent)]">Ops</span>
             </span>
           </div>
           <div className="hidden md:flex items-center gap-8 text-sm font-medium text-[var(--color-base-600)]">
@@ -64,7 +64,7 @@ export default async function RootPage() {
             </Link>
             <Link
               href="/signup"
-              className="text-sm font-semibold text-white bg-[#F5A623] hover:bg-[#e0951e] px-4 py-2 rounded-lg transition-all active:scale-[0.98]"
+              className="text-sm font-semibold text-white bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] px-4 py-2 rounded-lg transition-all active:scale-[0.98]"
             >
               Start Free Trial
             </Link>
@@ -89,7 +89,7 @@ export default async function RootPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
           <h1 className="font-[var(--font-display)] text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight leading-[1.1] mb-6">
             <span className="text-[var(--color-base-900)]">Shift</span>
-            <span className="text-[#F5A623]">Ops</span>
+            <span className="text-[var(--color-accent)]">Ops</span>
           </h1>
           <p className="font-[var(--font-display)] text-2xl sm:text-3xl font-semibold text-[var(--color-base-800)] mb-4 max-w-3xl mx-auto">
             Run your franchise operations, not just track them.
@@ -101,7 +101,7 @@ export default async function RootPage() {
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link
               href="/signup"
-              className="inline-flex items-center gap-2 text-base font-semibold text-white bg-[#F5A623] hover:bg-[#e0951e] px-8 py-3.5 rounded-xl shadow-lg shadow-[#F5A623]/20 transition-all active:scale-[0.98]"
+              className="inline-flex items-center gap-2 text-base font-semibold text-white bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] px-8 py-3.5 rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-[0.98]"
             >
               Start Free Trial
               <ArrowRight className="w-5 h-5" />
@@ -113,6 +113,73 @@ export default async function RootPage() {
               See How It Works
               <ChevronRight className="w-5 h-5" />
             </a>
+          </div>
+        </div>
+
+        {/* App Preview Mockup */}
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 mt-16">
+          <div className="rounded-xl border border-[var(--color-base-200)] shadow-2xl shadow-indigo-100 overflow-hidden bg-white">
+            {/* Browser chrome */}
+            <div className="bg-[var(--color-base-50)] border-b border-[var(--color-base-200)] px-4 py-2.5 flex items-center gap-2">
+              <div className="flex gap-1.5">
+                <div className="w-3 h-3 rounded-full bg-red-400" />
+                <div className="w-3 h-3 rounded-full bg-yellow-400" />
+                <div className="w-3 h-3 rounded-full bg-green-400" />
+              </div>
+              <div className="flex-1 flex justify-center">
+                <div className="bg-white rounded-md border border-[var(--color-base-200)] px-4 py-1 text-xs text-[var(--color-base-400)] font-mono">
+                  shiftops.app/app
+                </div>
+              </div>
+            </div>
+            {/* App mockup content */}
+            <div className="flex">
+              {/* Sidebar mock */}
+              <div className="hidden sm:block w-48 bg-[var(--color-base-800)] p-4 min-h-[320px]">
+                <div className="text-white font-bold text-sm mb-6">ShiftOps</div>
+                <div className="space-y-1">
+                  {["Dashboard", "Roster", "Cashup", "Staff", "Reports", "Settings"].map((item, i) => (
+                    <div key={item} className={`px-3 py-2 rounded-lg text-xs font-medium ${i === 0 ? "bg-[var(--color-accent)] text-white" : "text-gray-400"}`}>
+                      {item}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* Content mock */}
+              <div className="flex-1 p-6 bg-gray-50">
+                <div className="text-lg font-bold text-gray-900 mb-4">Dashboard</div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+                  {[
+                    { label: "BRANCHES", value: "5" },
+                    { label: "CASHUPS", value: "4 of 5" },
+                    { label: "MISSING", value: "1" },
+                    { label: "TURNOVER", value: "R 273K" },
+                  ].map((card) => (
+                    <div key={card.label} className="bg-white rounded-lg border border-gray-200 p-3">
+                      <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">{card.label}</div>
+                      <div className="text-xl font-bold text-gray-900 mt-1 font-mono">{card.value}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="bg-white rounded-lg border border-gray-200 p-4">
+                  <div className="text-sm font-semibold text-gray-700 mb-3">Today&apos;s Roster</div>
+                  <div className="space-y-2">
+                    {[
+                      { name: "Bosisiwe Z.", pos: "FOH", time: "08:00 - 16:00", color: "bg-green-500" },
+                      { name: "Motlalepule M.", pos: "Driver", time: "11:00 - 21:00", color: "bg-orange-500" },
+                      { name: "Siphamandla M.", pos: "Driver", time: "11:00 - 21:00", color: "bg-orange-500" },
+                    ].map((s) => (
+                      <div key={s.name} className="flex items-center gap-3 text-xs text-gray-600">
+                        <div className={`w-2 h-2 rounded-full ${s.color}`} />
+                        <span className="font-medium text-gray-900 w-28">{s.name}</span>
+                        <span className="text-gray-400 w-12">{s.pos}</span>
+                        <span className="font-mono text-gray-500">{s.time}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -303,12 +370,12 @@ export default async function RootPage() {
                 key={plan.name}
                 className={`relative rounded-2xl p-8 flex flex-col ${
                   plan.highlighted
-                    ? "bg-[#1a1d2e] border-2 border-[#F5A623] shadow-lg shadow-[#F5A623]/10"
+                    ? "bg-[#1a1d2e] border-2 border-[var(--color-accent)] shadow-lg shadow-indigo-200/50"
                     : "bg-[#1a1d2e] border border-[#2a2d3e]"
                 }`}
               >
                 {plan.highlighted && (
-                  <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-[#F5A623] text-white text-xs font-bold px-4 py-1 rounded-full uppercase tracking-wider">
+                  <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-[var(--color-accent)] text-white text-xs font-bold px-4 py-1 rounded-full uppercase tracking-wider">
                     Most Popular
                   </div>
                 )}
@@ -323,7 +390,7 @@ export default async function RootPage() {
                 <ul className="space-y-3 mb-8 flex-1">
                   {plan.features.map((f) => (
                     <li key={f} className="flex items-start gap-3 text-sm text-[#cbd5e1]">
-                      <CheckCircle2 className="w-4 h-4 text-[#F5A623] mt-0.5 flex-shrink-0" />
+                      <CheckCircle2 className="w-4 h-4 text-[var(--color-accent)] mt-0.5 flex-shrink-0" />
                       {f}
                     </li>
                   ))}
@@ -332,7 +399,7 @@ export default async function RootPage() {
                   href="/signup"
                   className={`w-full text-center font-semibold rounded-xl px-4 py-3 transition-all active:scale-[0.98] ${
                     plan.highlighted
-                      ? "bg-[#F5A623] text-white hover:bg-[#e0951e]"
+                      ? "bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent-hover)]"
                       : "bg-[#2a2d3e] text-white hover:bg-[#3a3d4e] border border-[#3a3d4e]"
                   }`}
                 >
@@ -375,7 +442,7 @@ export default async function RootPage() {
               },
             ].map((item) => (
               <div key={item.step} className="text-center">
-                <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-[#FFF8EE] border-2 border-[#F5A623]/20 text-[#F5A623] font-bold text-xl mb-5">
+                <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-[#FFF8EE] border-2 border-[var(--color-accent)]/20 text-[var(--color-accent)] font-bold text-xl mb-5">
                   {item.step}
                 </div>
                 <h3 className="font-[var(--font-display)] text-lg font-semibold text-[var(--color-base-900)] mb-2">
@@ -403,13 +470,13 @@ export default async function RootPage() {
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link
               href="/signup"
-              className="inline-flex items-center gap-2 text-base font-semibold text-white bg-[#F5A623] hover:bg-[#e0951e] px-8 py-3.5 rounded-xl shadow-lg shadow-[#F5A623]/20 transition-all active:scale-[0.98]"
+              className="inline-flex items-center gap-2 text-base font-semibold text-white bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] px-8 py-3.5 rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-[0.98]"
             >
               Start Free Trial
               <ArrowRight className="w-5 h-5" />
             </Link>
             <a
-              href="mailto:dineshan@claimtec.co.za"
+              href="mailto:info@shiftops.co.za"
               className="text-base font-medium text-[#94a3b8] hover:text-white transition-colors"
             >
               Or book a demo &rarr;
@@ -425,7 +492,7 @@ export default async function RootPage() {
             <div className="flex items-center gap-2">
               <span className="font-[var(--font-display)] text-lg font-bold tracking-tight">
                 <span className="text-white">Shift</span>
-                <span className="text-[#F5A623]">Ops</span>
+                <span className="text-[var(--color-accent)]">Ops</span>
               </span>
             </div>
             <div className="flex flex-wrap items-center justify-center gap-6 text-sm text-[#94a3b8]">
@@ -446,10 +513,10 @@ export default async function RootPage() {
           <div className="mt-8 pt-6 border-t border-[#1a1d2e] flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-[#64748b]">
             <p>Built for South African franchise restaurants</p>
             <a
-              href="mailto:dineshan@claimtec.co.za"
+              href="mailto:info@shiftops.co.za"
               className="hover:text-[#94a3b8] transition-colors"
             >
-              dineshan@claimtec.co.za
+              info@shiftops.co.za
             </a>
           </div>
         </div>

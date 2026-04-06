@@ -14,10 +14,10 @@
   --color-base-200: #e2e8f0;
   --color-base-50: #f8fafc;
 
-  /* Accent */
-  --color-accent: #6366f1;
-  --color-accent-hover: #4f46e5;
-  --color-accent-soft: #eef2ff;
+  /* Accent — warm orange for food/franchise industry */
+  --color-accent: #F5A623;
+  --color-accent-hover: #E8951A;
+  --color-accent-soft: #FEF3C7;
 
   /* Surfaces */
   --color-surface: #ffffff;
