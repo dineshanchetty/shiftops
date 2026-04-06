@@ -195,6 +195,15 @@ export default function RosterPage() {
     [entries]
   );
 
+  // Unique staff count (excluding OFF-only)
+  const uniqueStaffCount = useMemo(() => {
+    const staffIds = new Set<string>();
+    for (const e of entries) {
+      if (!e.is_off) staffIds.add(e.staff_id);
+    }
+    return staffIds.size;
+  }, [entries]);
+
   // Entries for the editor date
   const editorEntries = useMemo(
     () => (editorDate ? entries.filter((e) => e.date === editorDate) : []),
@@ -256,7 +265,7 @@ export default function RosterPage() {
 
       {/* Summary */}
       <div className="mt-4">
-        <RosterSummary totalScheduledHours={totalScheduledHours} />
+        <RosterSummary totalScheduledHours={totalScheduledHours} staffCount={uniqueStaffCount} />
       </div>
 
       {/* Calendar Grid */}

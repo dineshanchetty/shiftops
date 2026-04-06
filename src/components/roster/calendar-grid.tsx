@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
-import { Plus } from "lucide-react";
-import { ShiftChip } from "./shift-chip";
+import { formatTime } from "@/lib/utils";
+import { Plus, Pencil } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import type { RosterEntry, Staff, Position } from "@/lib/types";
 
 type EntryWithStaff = RosterEntry & {
@@ -22,6 +23,13 @@ interface CalendarGridProps {
 
 const DAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+const POSITION_COLORS: Record<string, string> = {
+  FOH: "#16A34A",
+  BOH: "#2563EB",
+  Driver: "#F5A623",
+  Manager: "#7C3AED",
+};
+
 function toDateStr(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -29,20 +37,27 @@ function toDateStr(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+function formatFullDate(dateStr: string): string {
+  const d = new Date(dateStr + "T00:00:00");
+  return d.toLocaleDateString("en-ZA", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
 /**
  * Build an array of weeks, each week being an array of 7 Date|null cells (Mon-Sun).
- * We pad the start and end to align with week boundaries.
  */
 function buildWeeks(start: Date, end: Date): (Date | null)[][] {
   const weeks: (Date | null)[][] = [];
 
-  // Find the Monday on or before the start date
   const firstDay = new Date(start);
-  const dayOfWeek = firstDay.getDay(); // 0=Sun, 1=Mon, ...
-  const offset = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // convert to Mon=0 basis
+  const dayOfWeek = firstDay.getDay();
+  const offset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
   firstDay.setDate(firstDay.getDate() - offset);
 
-  // Find the Sunday on or after the end date
   const lastDay = new Date(end);
   const endDayOfWeek = lastDay.getDay();
   const endOffset = endDayOfWeek === 0 ? 0 : 7 - endDayOfWeek;
@@ -70,6 +85,135 @@ function getPositionName(positionId: string | null | undefined, positions: Posit
   return positions.find((p) => p.id === positionId)?.name;
 }
 
+/** Compact day cell summary data */
+interface DaySummary {
+  staffCount: number;
+  totalHours: number;
+  allFilled: boolean;
+  hasEntries: boolean;
+}
+
+function computeDaySummary(dayEntries: EntryWithStaff[]): DaySummary {
+  const workingEntries = dayEntries.filter((e) => !e.is_off);
+  const staffCount = workingEntries.length;
+  const totalHours = workingEntries.reduce((sum, e) => sum + (e.shift_hours ?? 0), 0);
+  const allFilled = staffCount > 0 && workingEntries.every((e) => e.shift_start && e.shift_end);
+  return { staffCount, totalHours, allFilled, hasEntries: dayEntries.length > 0 };
+}
+
+/* ─── Daily Detail Panel ─── */
+
+function DailyDetailPanel({
+  dateStr,
+  entries,
+  positions,
+  onEditShifts,
+}: {
+  dateStr: string;
+  entries: EntryWithStaff[];
+  positions: Position[];
+  onEditShifts: () => void;
+}) {
+  const workingEntries = entries.filter((e) => !e.is_off);
+  const offEntries = entries.filter((e) => e.is_off);
+  const totalHours = workingEntries.reduce((sum, e) => sum + (e.shift_hours ?? 0), 0);
+  const staffCount = workingEntries.length;
+
+  return (
+    <div className="border-t border-base-200 bg-surface rounded-b-xl overflow-hidden">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4 border-b border-base-200">
+        <div>
+          <h3 className="text-base font-semibold text-base-900">
+            {formatFullDate(dateStr)}
+          </h3>
+          <p className="text-sm text-base-500 mt-0.5">
+            {staffCount} staff &middot; {Math.round(totalHours)}h total
+          </p>
+        </div>
+        <Button variant="secondary" size="sm" onClick={onEditShifts}>
+          <Pencil size={14} />
+          Edit Shifts
+        </Button>
+      </div>
+
+      {/* Shift rows */}
+      <div className="px-4 sm:px-6">
+        {entries.length === 0 ? (
+          <div className="py-8 text-center">
+            <p className="text-sm text-base-400 mb-3">No shifts scheduled</p>
+            <Button variant="secondary" size="sm" onClick={onEditShifts}>
+              <Plus size={14} />
+              Add Shifts
+            </Button>
+          </div>
+        ) : (
+          <>
+            {/* Working shifts */}
+            {workingEntries.map((entry) => {
+              const posName = getPositionName(entry.staff.position_id, positions);
+              const dotColor = posName ? POSITION_COLORS[posName] ?? "#9CA3AF" : "#9CA3AF";
+              const fStart = entry.shift_start ? formatTime(entry.shift_start) : "--:--";
+              const fEnd = entry.shift_end ? formatTime(entry.shift_end) : "--:--";
+              const hours = entry.shift_hours ?? 0;
+
+              return (
+                <div
+                  key={entry.id}
+                  className="flex items-center gap-4 py-3 border-b border-gray-100 last:border-b-0"
+                >
+                  <span
+                    className="inline-block h-2.5 w-2.5 rounded-full shrink-0"
+                    style={{ backgroundColor: dotColor }}
+                  />
+                  <span className="text-sm font-medium text-base-900 min-w-[180px] sm:min-w-[220px] truncate">
+                    {entry.staff.first_name} {entry.staff.last_name}
+                  </span>
+                  <span className="text-xs text-base-500 min-w-[60px] hidden sm:inline">
+                    {posName ?? "—"}
+                  </span>
+                  <span className="text-sm font-mono text-base-700 min-w-[110px]">
+                    {fStart} &ndash; {fEnd}
+                  </span>
+                  <span className="text-xs bg-gray-100 rounded px-1.5 py-0.5 text-gray-600 font-mono">
+                    {Math.round(hours)}h
+                  </span>
+                </div>
+              );
+            })}
+
+            {/* OFF entries */}
+            {offEntries.map((entry) => {
+              const posName = getPositionName(entry.staff.position_id, positions);
+              const dotColor = posName ? POSITION_COLORS[posName] ?? "#9CA3AF" : "#9CA3AF";
+
+              return (
+                <div
+                  key={entry.id}
+                  className="flex items-center gap-4 py-3 border-b border-gray-100 last:border-b-0 opacity-50"
+                >
+                  <span
+                    className="inline-block h-2.5 w-2.5 rounded-full shrink-0"
+                    style={{ backgroundColor: dotColor }}
+                  />
+                  <span className="text-sm font-medium text-base-500 min-w-[180px] sm:min-w-[220px] truncate">
+                    {entry.staff.first_name} {entry.staff.last_name}
+                  </span>
+                  <span className="text-xs bg-base-200 text-base-500 rounded px-1.5 py-0.5 font-semibold">
+                    OFF
+                  </span>
+                </div>
+              );
+            })}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Main CalendarGrid ─── */
+
 export function CalendarGrid({
   entries,
   positions = [],
@@ -78,6 +222,8 @@ export function CalendarGrid({
   loading = false,
   workingDays,
 }: CalendarGridProps) {
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+
   const today = useMemo(() => new Date(), []);
   const todayStr = toDateStr(today);
 
@@ -97,48 +243,49 @@ export function CalendarGrid({
     [dateRange.start, dateRange.end]
   );
 
-  // Compute which day-of-week index (0-6) is today, or -1 if today is outside range
   const todayColIndex = useMemo(() => {
     const d = today.getDay();
     return d === 0 ? 6 : d - 1;
   }, [today]);
 
-  const isTodayInRange =
-    today >= dateRange.start && today <= dateRange.end;
+  const isTodayInRange = today >= dateRange.start && today <= dateRange.end;
 
-  // Build a set of non-working day abbreviations for quick lookup
   const workingDaySet = useMemo(() => {
-    if (!workingDays) return null; // no filtering when prop not provided
+    if (!workingDays) return null;
     return new Set(workingDays);
   }, [workingDays]);
+
+  function handleDayClick(dateStr: string) {
+    setSelectedDate((prev) => (prev === dateStr ? null : dateStr));
+  }
+
+  function handleEditShifts() {
+    if (selectedDate) {
+      onDateClick(selectedDate);
+    }
+  }
+
+  const selectedEntries = useMemo(
+    () => (selectedDate ? entriesByDate.get(selectedDate) ?? [] : []),
+    [selectedDate, entriesByDate]
+  );
 
   if (loading) {
     return (
       <div className="rounded-xl border border-base-200 overflow-hidden overflow-x-auto">
-        {/* Header */}
-        <div className="grid bg-base-800" style={{ gridTemplateColumns: "repeat(7, minmax(140px, 1fr))" }}>
+        <div className="grid bg-base-800" style={{ gridTemplateColumns: "repeat(7, minmax(80px, 1fr))" }}>
           {DAY_HEADERS.map((d) => (
-            <div
-              key={d}
-              className="px-2 py-2 text-center text-xs font-semibold uppercase text-white"
-            >
+            <div key={d} className="px-2 py-2 text-center text-xs font-semibold uppercase text-white">
               {d}
             </div>
           ))}
         </div>
-        {/* Skeleton rows */}
         {Array.from({ length: 5 }).map((_, wi) => (
-          <div key={wi} className="grid" style={{ gridTemplateColumns: "repeat(7, minmax(140px, 1fr))" }}>
+          <div key={wi} className="grid" style={{ gridTemplateColumns: "repeat(7, minmax(80px, 1fr))" }}>
             {Array.from({ length: 7 }).map((_, di) => (
-              <div
-                key={di}
-                className="min-h-[100px] border-r border-b border-gray-200 p-2"
-              >
+              <div key={di} className="min-h-[60px] border-r border-b border-gray-200 p-2">
                 <div className="h-4 w-6 rounded bg-base-200 animate-pulse mb-2" />
-                <div className="space-y-1.5">
-                  <div className="h-8 rounded-lg bg-base-200 animate-pulse" />
-                  <div className="h-8 rounded-lg bg-base-200 animate-pulse" />
-                </div>
+                <div className="h-5 w-5 rounded-full bg-base-200 animate-pulse mx-auto" />
               </div>
             ))}
           </div>
@@ -147,14 +294,11 @@ export function CalendarGrid({
     );
   }
 
-  // Always render the full calendar grid — even with no entries,
-  // so users can click dates to add their first shifts.
   return (
-    <div className="rounded-xl border border-base-200 overflow-hidden overflow-x-auto">
-      {/* Desktop view */}
+    <div className="rounded-xl border border-base-200 overflow-hidden">
+      {/* ─── Desktop compact month view ─── */}
       <div className="hidden md:block">
-        {/* Header */}
-        <div className="grid bg-base-800" style={{ gridTemplateColumns: "repeat(7, minmax(140px, 1fr))" }}>
+        <div className="grid bg-base-800" style={{ gridTemplateColumns: "repeat(7, minmax(80px, 1fr))" }}>
           {DAY_HEADERS.map((d, i) => (
             <div
               key={d}
@@ -168,15 +312,14 @@ export function CalendarGrid({
           ))}
         </div>
 
-        {/* Weeks */}
         {weeks.map((week, wi) => (
-          <div key={wi} className="grid" style={{ gridTemplateColumns: "repeat(7, minmax(140px, 1fr))" }}>
+          <div key={wi} className="grid" style={{ gridTemplateColumns: "repeat(7, minmax(80px, 1fr))" }}>
             {week.map((date, di) => {
               if (!date) {
                 return (
                   <div
                     key={di}
-                    className="min-h-[100px] border-r border-b border-gray-200 bg-gray-50/50"
+                    className="min-h-[60px] border-r border-b border-gray-200 bg-gray-50/50"
                   />
                 );
               }
@@ -184,67 +327,61 @@ export function CalendarGrid({
               const dateStr = toDateStr(date);
               const dayEntries = entriesByDate.get(dateStr) ?? [];
               const isToday = dateStr === todayStr;
+              const isSelected = dateStr === selectedDate;
               const dayAbbr = DAY_HEADERS[di];
               const isNonWorkingDay = workingDaySet ? !workingDaySet.has(dayAbbr) : false;
-              const totalHours = dayEntries.reduce(
-                (sum, e) => sum + (e.is_off ? 0 : (e.shift_hours ?? 0)),
-                0
-              );
+              const summary = computeDaySummary(dayEntries);
+
+              // Status dot color
+              let statusColor = "bg-gray-300"; // empty
+              if (summary.hasEntries) {
+                statusColor = summary.allFilled ? "bg-green-500" : "bg-amber-400";
+              }
 
               return (
                 <button
                   key={di}
-                  onClick={() => onDateClick(dateStr)}
+                  onClick={() => handleDayClick(dateStr)}
                   className={cn(
-                    "min-h-[100px] border-r border-b border-gray-200 p-2 text-left transition-colors group relative",
-                    isToday && "bg-blue-50",
-                    isTodayInRange && di === todayColIndex && !isToday && "bg-blue-50/20",
+                    "min-h-[60px] border-r border-b border-gray-200 p-2 text-left transition-all group relative",
+                    isSelected && "ring-2 ring-accent bg-accent/5",
+                    isToday && !isSelected && "bg-blue-50",
+                    isTodayInRange && di === todayColIndex && !isToday && !isSelected && "bg-blue-50/20",
                     isNonWorkingDay && "bg-gray-100 opacity-60",
-                    !isNonWorkingDay && !isToday && "hover:bg-gray-50"
+                    !isNonWorkingDay && !isToday && !isSelected && "hover:bg-gray-50"
                   )}
                 >
-                  {/* Date number */}
+                  {/* Row 1: date + status dot */}
                   <div className="flex items-center justify-between mb-1">
                     <span
                       className={cn(
                         "text-sm",
-                        isToday
-                          ? "font-bold text-accent"
-                          : "font-medium text-base-700"
+                        isToday ? "font-bold text-accent" : "font-medium text-base-700"
                       )}
                     >
                       {date.getDate()}
                     </span>
-                    {dayEntries.length === 0 && (
-                      <span className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Plus size={14} className="text-base-400" />
+                    <span className={cn("inline-block h-2 w-2 rounded-full shrink-0", statusColor)} />
+                  </div>
+
+                  {/* Row 2: staff count badge + total hours */}
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className={cn(
+                        "inline-flex items-center justify-center h-5 w-5 rounded-full text-[10px] font-bold shrink-0",
+                        summary.staffCount > 0
+                          ? "bg-accent text-white"
+                          : "bg-gray-200 text-gray-400"
+                      )}
+                    >
+                      {summary.staffCount}
+                    </span>
+                    {summary.totalHours > 0 && (
+                      <span className="text-[10px] font-mono text-base-400">
+                        {Math.round(summary.totalHours)}h
                       </span>
                     )}
                   </div>
-
-                  {/* Shift chips */}
-                  <div className="space-y-1">
-                    {dayEntries.map((entry) => (
-                      <ShiftChip
-                        key={entry.id}
-                        staffName={`${entry.staff.first_name} ${entry.staff.last_name.charAt(0)}.`}
-                        positionName={getPositionName(entry.staff.position_id, positions)}
-                        shiftStart={entry.shift_start}
-                        shiftEnd={entry.shift_end}
-                        shiftHours={entry.shift_hours}
-                        isOff={entry.is_off ?? false}
-                      />
-                    ))}
-                  </div>
-
-                  {/* Total hours footer */}
-                  {dayEntries.length > 0 && (
-                    <div className="mt-1.5 pt-1 border-t border-gray-100">
-                      <span className="text-[10px] font-mono text-base-400">
-                        Total: {totalHours.toFixed(0).padStart(2, "0")}:00
-                      </span>
-                    </div>
-                  )}
                 </button>
               );
             })}
@@ -252,100 +389,94 @@ export function CalendarGrid({
         ))}
       </div>
 
-      {/* Mobile view - 3-day scroll */}
+      {/* ─── Mobile compact view ─── */}
       <div className="md:hidden">
-        {/* Header */}
-        <div className="grid grid-cols-3 bg-base-800">
-          {DAY_HEADERS.slice(0, 3).map((d) => (
-            <div
-              key={d}
-              className="px-2 py-2 text-center text-xs font-semibold uppercase text-white"
-            >
+        <div className="grid grid-cols-7 bg-base-800">
+          {DAY_HEADERS.map((d) => (
+            <div key={d} className="px-1 py-2 text-center text-[10px] font-semibold uppercase text-white">
               {d}
             </div>
           ))}
         </div>
 
-        <div className="overflow-x-auto">
-          <div
-            className="grid"
-            style={{
-              gridTemplateColumns: `repeat(${
-                weeks.length * 7
-              }, minmax(120px, 1fr))`,
-              gridAutoFlow: "column",
-            }}
-          >
-            {weeks.flatMap((week) =>
-              week.map((date, di) => {
-                if (!date) {
-                  return (
-                    <div
-                      key={`m-${di}-${Math.random()}`}
-                      className="min-h-[120px] border-r border-b border-gray-200 bg-gray-50/50 min-w-[120px]"
-                    />
-                  );
-                }
-
-                const dateStr = toDateStr(date);
-                const dayEntries = entriesByDate.get(dateStr) ?? [];
-                const isToday = dateStr === todayStr;
-                const totalHours = dayEntries.reduce(
-                  (sum, e) => sum + (e.is_off ? 0 : (e.shift_hours ?? 0)),
-                  0
-                );
-
+        {weeks.map((week, wi) => (
+          <div key={wi} className="grid grid-cols-7">
+            {week.map((date, di) => {
+              if (!date) {
                 return (
-                  <button
-                    key={`m-${dateStr}`}
-                    onClick={() => onDateClick(dateStr)}
-                    className={cn(
-                      "min-h-[120px] min-w-[120px] border-r border-b border-gray-200 p-2 text-left transition-colors hover:bg-surface-2",
-                      isToday && "bg-blue-50/60"
-                    )}
-                  >
-                    <div className="mb-1">
-                      <span className="text-xs text-base-400">
-                        {DAY_HEADERS[date.getDay() === 0 ? 6 : date.getDay() - 1]}
-                      </span>
-                      <span
-                        className={cn(
-                          "ml-1 text-sm",
-                          isToday
-                            ? "font-bold text-accent"
-                            : "font-medium text-base-700"
-                        )}
-                      >
-                        {date.getDate()}
-                      </span>
-                    </div>
-
-                    <div className="space-y-1">
-                      {dayEntries.map((entry) => (
-                        <ShiftChip
-                          key={entry.id}
-                          staffName={`${entry.staff.first_name} ${entry.staff.last_name.charAt(0)}.`}
-                          positionName={getPositionName(entry.staff.position_id, positions)}
-                          shiftStart={entry.shift_start}
-                          shiftEnd={entry.shift_end}
-                          shiftHours={entry.shift_hours}
-                          isOff={entry.is_off ?? false}
-                        />
-                      ))}
-                    </div>
-
-                    {dayEntries.length > 0 && (
-                      <div className="mt-1 text-[10px] font-mono text-base-400">
-                        Total: {totalHours.toFixed(0).padStart(2, "0")}:00
-                      </div>
-                    )}
-                  </button>
+                  <div
+                    key={di}
+                    className="min-h-[52px] border-r border-b border-gray-200 bg-gray-50/50"
+                  />
                 );
-              })
-            )}
+              }
+
+              const dateStr = toDateStr(date);
+              const dayEntries = entriesByDate.get(dateStr) ?? [];
+              const isToday = dateStr === todayStr;
+              const isSelected = dateStr === selectedDate;
+              const summary = computeDaySummary(dayEntries);
+
+              let statusColor = "bg-gray-300";
+              if (summary.hasEntries) {
+                statusColor = summary.allFilled ? "bg-green-500" : "bg-amber-400";
+              }
+
+              return (
+                <button
+                  key={di}
+                  onClick={() => handleDayClick(dateStr)}
+                  className={cn(
+                    "min-h-[52px] border-r border-b border-gray-200 p-1.5 text-left transition-all",
+                    isSelected && "ring-2 ring-accent bg-accent/5",
+                    isToday && !isSelected && "bg-blue-50",
+                    !isToday && !isSelected && "hover:bg-gray-50"
+                  )}
+                >
+                  <div className="flex items-center justify-between mb-0.5">
+                    <span
+                      className={cn(
+                        "text-xs",
+                        isToday ? "font-bold text-accent" : "font-medium text-base-700"
+                      )}
+                    >
+                      {date.getDate()}
+                    </span>
+                    <span className={cn("inline-block h-1.5 w-1.5 rounded-full shrink-0", statusColor)} />
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span
+                      className={cn(
+                        "inline-flex items-center justify-center h-4 w-4 rounded-full text-[8px] font-bold shrink-0",
+                        summary.staffCount > 0
+                          ? "bg-accent text-white"
+                          : "bg-gray-200 text-gray-400"
+                      )}
+                    >
+                      {summary.staffCount}
+                    </span>
+                    {summary.totalHours > 0 && (
+                      <span className="text-[8px] font-mono text-base-400">
+                        {Math.round(summary.totalHours)}h
+                      </span>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
           </div>
-        </div>
+        ))}
       </div>
+
+      {/* ─── Daily Detail Panel ─── */}
+      {selectedDate && (
+        <DailyDetailPanel
+          dateStr={selectedDate}
+          entries={selectedEntries}
+          positions={positions}
+          onEditShifts={handleEditShifts}
+        />
+      )}
     </div>
   );
 }
