@@ -25,54 +25,76 @@ Tenant (Franchise Group)
 
 ## Phase Breakdown
 
-### Phase 1 — Foundation + SaaS Shell (Week 1–2)
+### Phase 1 — Foundation + SaaS Shell (Week 1-2)
 - [x] Next.js 14 + Supabase project init
 - [x] GitHub repo created
-- [ ] Database schema: tenants, brands, branches, staff, positions, sub_positions
-- [ ] RLS policies for full tenant isolation
-- [ ] Auth with 3 roles: Owner, Manager, Staff
-- [ ] App shell: dark sidebar + light content area
-- [ ] Middleware: tenant membership check on /app/* routes
-- [ ] Onboarding wizard (company → brands → branch → invite manager)
-- [ ] Navigation: Home | Roster | Cashup | Reports | Settings
+- [x] Database schema: tenants, brands, branches, staff, positions, sub_positions
+- [x] RLS policies for full tenant isolation
+- [x] Auth with 3 roles: Owner, Manager, Staff
+- [x] App shell: dark sidebar + light content area
+- [x] Middleware: tenant membership check on /app/* routes
+- [x] Onboarding wizard (company -> brands -> branch -> invite manager)
+- [x] Navigation: Home | Roster | Cashup | Reports | Settings
 
 ### Phase 2 — Aura Integration Layer (Week 2)
-- [ ] Supabase Edge Function: aura-ftp-poller
-- [ ] SFTP connection with encrypted credentials (Supabase Vault)
-- [ ] CSV parser with configurable field mapping
-- [ ] aura_imports tracking table
-- [ ] Manual CSV upload fallback with preview
-- [ ] Branch settings: SFTP config + test connection + import history
-- [ ] Field mapper UI for custom Aura column mapping
+- [x] Supabase Edge Function: aura-ftp-poller
+- [x] SFTP connection with encrypted credentials (Supabase Vault)
+- [x] CSV parser with configurable field mapping
+- [x] aura_imports tracking table
+- [x] Manual CSV upload fallback with preview
+- [x] Branch settings: SFTP config + test connection + import history
+- [x] Field mapper UI for custom Aura column mapping
 
-### Phase 3 — Roster Module (Week 3–4)
-- [ ] Filter bar: branch, position, sub-position, month/year range
-- [ ] Mon-Sun calendar grid with shift chips
-- [ ] Shift entry slide-over panel
-- [ ] Day-off support ("None" / "OFF")
-- [ ] Hours totals per day and per period
-- [ ] Roster PDF export
+### Phase 3 — Roster Module (Week 3-4)
+- [x] Filter bar: branch, position, sub-position, month/year range
+- [x] Mon-Sun calendar grid with shift chips
+- [x] Shift entry slide-over panel
+- [x] Day-off support ("None" / "OFF")
+- [x] Hours totals per day and per period
+- [x] Roster PDF export
 
-### Phase 4 — Daily Cashup Module (Week 4–5)
-- [ ] Cashup form with Aura auto-fill banner
-- [ ] Driver table auto-populated from roster
-- [ ] Online payment channels (dynamic per branch)
-- [ ] Real-time summary panel with variance indicator
-- [ ] Transaction counts + purchase items
-- [ ] Submit + lock flow with edit capability
+### Phase 4 — Daily Cashup Module (Week 4-5)
+- [x] Cashup form with Aura auto-fill banner
+- [x] Driver table auto-populated from roster
+- [x] Online payment channels (dynamic per branch)
+- [x] Real-time summary panel with variance indicator
+- [x] Transaction counts + purchase items
+- [x] Submit + lock flow with edit capability
 
-### Phase 5 — Reports Module (Week 5–6)
-- [ ] Shared report wrapper (branch selector, date range, export CSV/PDF)
-- [ ] 8 core reports: daily-banking, monthly-summary, wages-vs-turnover,
+### Phase 5 — Reports Module (Week 5-6)
+- [x] Shared report wrapper (branch selector, date range, export CSV/PDF)
+- [x] 8 core reports: daily-banking, monthly-summary, wages-vs-turnover,
       driver-report, delivery-cost, online-payments, global-turnover,
       aura-inconsistency
 
-### Phase 6 — SaaS Commercialisation (Week 6–7)
-- [ ] PayFast integration for ZAR billing
-- [ ] Tenant plan limits (branch count, user count)
-- [ ] 14-day free trial
-- [ ] Billing page with plan management
-- [ ] White-label support (custom colors, logo, brand name)
+### Phase 6 — SaaS Commercialisation (Week 6-7)
+- [x] PayFast integration for ZAR billing
+- [x] Tenant plan limits (branch count, user count)
+- [x] 14-day free trial
+- [x] Billing page with plan management
+- [x] White-label support (custom colors, logo, brand name)
+
+### Phase 7 — Testing & Security Hardening (Current)
+- [ ] End-to-end tests for critical user flows (auth, cashup, roster)
+- [ ] RLS policy audit — verify no cross-tenant data leakage
+- [ ] Edge Function deployment and integration testing
+- [ ] PayFast webhook signature verification testing
+- [ ] SFTP credential Vault integration testing
+- [ ] Performance testing: large roster grids, report generation
+- [ ] Accessibility audit (WCAG 2.1 AA)
+- [ ] Mobile responsive QA across devices
+- [ ] Error boundary and fallback UI review
+- [ ] Production environment setup and deployment
+
+## Deployment Instructions
+
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for full deployment guide covering:
+- Azure Static Web Apps / App Service setup
+- Supabase Edge Function deployment
+- pg_cron configuration for Aura poller
+- Environment variables and secrets
+- CI/CD with GitHub Actions
+- Domain and DNS configuration
 
 ## Key Differentiators vs Legacy System
 1. **Aura auto-fill** — eliminates manual re-entry of POS data
