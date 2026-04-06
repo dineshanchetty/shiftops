@@ -79,24 +79,8 @@ jobs:
           zip -r deploy.zip . -x ".git/*" "test-results/*" "playwright-report/*" ".next/cache/*" "supabase/*" "tests/*" "docs/*" ".claude/*" "screenshots/*"
 
       - name: Deploy to Azure App Service
-        env:
-          PUBLISH_PROFILE: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-        run: |
-          # Extract credentials from publish profile XML
-          USERNAME=$(echo "$PUBLISH_PROFILE" | grep -o 'userName="[^"]*"' | head -1 | cut -d'"' -f2)
-          PASSWORD=$(echo "$PUBLISH_PROFILE" | grep -o 'userPWD="[^"]*"' | head -1 | cut -d'"' -f2)
-          echo "Deploying via Kudu zip deploy..."
-          HTTP_CODE=$(curl -s -X POST \
-            "https://shiftops-app.scm.azurewebsites.net/api/zipdeploy" \
-            -u "$USERNAME:$PASSWORD" \
-            -H "Content-Type: application/zip" \
-            --data-binary @deploy.zip \
-            -w "%{http_code}" \
-            -o /tmp/deploy-response.txt)
-          echo "HTTP Status: $HTTP_CODE"
-          if [ "$HTTP_CODE" -ge 400 ]; then
-            cat /tmp/deploy-response.txt
-            echo "Deployment failed with HTTP $HTTP_CODE"
-            exit 1
-          fi
-          echo "Deployment succeeded"
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: shiftops-app
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          package: deploy.zip
