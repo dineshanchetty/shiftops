@@ -191,6 +191,29 @@ export async function getDriversFromRoster(
     });
   }
 
+  // Fallback: if no drivers rostered for this date, show all active driver staff
+  // so the manager can still enter driver data for the cashup
+  if (drivers.length === 0) {
+    const { data: allDriverStaff } = await supabase
+      .from("staff")
+      .select("id, first_name, last_name")
+      .eq("branch_id", branchId)
+      .eq("tenant_id", tenantId)
+      .eq("position_id", driverPosition.id)
+      .eq("active", true)
+      .order("first_name");
+
+    if (allDriverStaff) {
+      for (const s of allDriverStaff) {
+        drivers.push({
+          staff_id: s.id,
+          first_name: s.first_name,
+          last_name: s.last_name,
+        });
+      }
+    }
+  }
+
   return drivers;
 }
 
