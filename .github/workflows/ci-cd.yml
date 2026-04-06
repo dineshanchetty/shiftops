@@ -12,9 +12,8 @@ env:
   NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
 
 jobs:
-  # ─── Build & Deploy ─────────────────────────────────────────────
   build-and-deploy:
-    name: Build & Deploy to Azure
+    name: Build & Deploy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,61 +26,43 @@ jobs:
       - run: npm ci
       - run: npm run build
 
-      # Deploy to Azure on push to main
-      # Package standalone output (self-contained, ~15MB)
-      - name: Create deployment package
+      - name: Prepare standalone package
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          # Copy static + public into standalone
           cp -r .next/static .next/standalone/.next/static
           cp -r public .next/standalone/public 2>/dev/null || true
-          # Create zip from standalone dir
           cd .next/standalone
           zip -r ../../deploy.zip .
           cd ../..
           echo "Package size: $(du -h deploy.zip | cut -f1)"
 
-      - name: Deploy to Azure via Kudu ZIP
+      - name: Deploy to Azure
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          SCM_USER: ${{ secrets.AZURE_SCM_USER }}
-          SCM_PASS: ${{ secrets.AZURE_SCM_PASS }}
         run: |
-          echo "Deploying to Azure App Service..."
           curl -X POST \
-            -u "$SCM_USER:$SCM_PASS" \
+            -u "${{ secrets.AZURE_SCM_USER }}:${{ secrets.AZURE_SCM_PASS }}" \
             --data-binary @deploy.zip \
             -H "Content-Type: application/zip" \
-            "https://shiftops-app.scm.azurewebsites.net/api/zipdeploy?isAsync=true" \
-            -w "\nHTTP Status: %{http_code}\n"
-          echo "Deployment initiated"
+            --max-time 300 \
+            "https://shiftops-app.scm.azurewebsites.net/api/zipdeploy" \
+            -w "\nHTTP Status: %{http_code}\n" \
+            -o deploy_response.txt
+          cat deploy_response.txt || true
 
-  # ─── E2E Tests (on PR only) ──────────────────────────────────
   test:
-    name: Playwright E2E Tests
+    name: Playwright Tests
     runs-on: ubuntu-latest
     needs: build-and-deploy
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
-
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-
-      - name: Run Playwright tests
-        run: npx playwright test --project=chromium
+      - run: npx playwright test --project=chromium
         env:
           TEST_USER_EMAIL: ${{ secrets.TEST_USER_EMAIL }}
           TEST_USER_PASSWORD: ${{ secrets.TEST_USER_PASSWORD }}
-
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: playwright-report
-          path: playwright-report/
-          retention-days: 7
