@@ -28,9 +28,20 @@ jobs:
       - run: npm run build
 
       # Deploy to Azure on push to main
+      # Package everything needed to run (pre-built, no Azure build)
       - name: Create deployment package
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: zip -r deploy.zip . -x ".git/*" "node_modules/*" "test-results/*" "playwright-report/*" ".next/cache/*" "supabase/*" "tests/*" "docs/*" ".claude/*" "screenshots/*"
+        run: |
+          zip -r deploy.zip \
+            package.json \
+            package-lock.json \
+            next.config.mjs \
+            node_modules/ \
+            .next/ \
+            public/ \
+            src/ \
+            -x "node_modules/.cache/*" ".next/cache/*"
+          echo "Package size: $(du -h deploy.zip | cut -f1)"
 
       - name: Deploy to Azure via Kudu ZIP
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -39,14 +50,13 @@ jobs:
           SCM_PASS: ${{ secrets.AZURE_SCM_PASS }}
         run: |
           echo "Deploying to Azure App Service..."
-          curl -s -X POST \
+          curl -X POST \
             -u "$SCM_USER:$SCM_PASS" \
             --data-binary @deploy.zip \
             -H "Content-Type: application/zip" \
-            "https://shiftops-app.scm.azurewebsites.net/api/zipdeploy?isAsync=false" \
-            -w "\nHTTP Status: %{http_code}\n" \
-            -o /dev/null
-          echo "Deployment complete"
+            "https://shiftops-app.scm.azurewebsites.net/api/zipdeploy?isAsync=true" \
+            -w "\nHTTP Status: %{http_code}\n"
+          echo "Deployment initiated"
 
   # ─── E2E Tests (on PR only) ──────────────────────────────────
   test:
