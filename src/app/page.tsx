@@ -101,7 +101,7 @@ export default async function RootPage() {
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link
               href="/signup"
-              className="inline-flex items-center gap-2 text-base font-semibold text-white bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] px-8 py-3.5 rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-[0.98]"
+              className="inline-flex items-center gap-2 text-base font-semibold text-white bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] px-8 py-3.5 rounded-xl shadow-lg shadow-orange-900/30 transition-all active:scale-[0.98]"
             >
               Start Free Trial
               <ArrowRight className="w-5 h-5" />
@@ -118,7 +118,7 @@ export default async function RootPage() {
 
         {/* App Preview Mockup */}
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 mt-16">
-          <div className="rounded-xl border border-[var(--color-base-200)] shadow-2xl shadow-indigo-100 overflow-hidden bg-white">
+          <div className="rounded-xl border border-[var(--color-base-200)] shadow-2xl shadow-gray-200 overflow-hidden bg-white">
             {/* Browser chrome */}
             <div className="bg-[var(--color-base-50)] border-b border-[var(--color-base-200)] px-4 py-2.5 flex items-center gap-2">
               <div className="flex gap-1.5">
@@ -374,7 +374,7 @@ export default async function RootPage() {
                 key={plan.name}
                 className={`relative rounded-2xl p-8 flex flex-col ${
                   plan.highlighted
-                    ? "bg-[#1a1d2e] border-2 border-[var(--color-accent)] shadow-lg shadow-indigo-200/50"
+                    ? "bg-[#1a1d2e] border-2 border-[var(--color-accent)] shadow-lg shadow-orange-900/30/50"
                     : "bg-[#1a1d2e] border border-[#2a2d3e]"
                 }`}
               >
@@ -474,7 +474,7 @@ export default async function RootPage() {
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link
               href="/signup"
-              className="inline-flex items-center gap-2 text-base font-semibold text-white bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] px-8 py-3.5 rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-[0.98]"
+              className="inline-flex items-center gap-2 text-base font-semibold text-white bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] px-8 py-3.5 rounded-xl shadow-lg shadow-orange-900/30 transition-all active:scale-[0.98]"
             >
               Start Free Trial
               <ArrowRight className="w-5 h-5" />
