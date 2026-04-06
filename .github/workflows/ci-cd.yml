@@ -1,6 +1,5 @@
 name: ShiftOps CI/CD
 
-# SCM basic auth re-enabled + fresh publish profile credentials
 on:
   push:
     branches: [main]
@@ -13,9 +12,9 @@ env:
   NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
 
 jobs:
-  # ─── Build & Lint ─────────────────────────────────────────────
-  build:
-    name: Build & Type Check
+  # ─── Build & Deploy ─────────────────────────────────────────────
+  build-and-deploy:
+    name: Build & Deploy to Azure
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,11 +27,32 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+      # Deploy to Azure on push to main
+      - name: Create deployment package
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: zip -r deploy.zip . -x ".git/*" "node_modules/*" "test-results/*" "playwright-report/*" ".next/cache/*" "supabase/*" "tests/*" "docs/*" ".claude/*" "screenshots/*"
+
+      - name: Deploy to Azure via Kudu ZIP
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          SCM_USER: ${{ secrets.AZURE_SCM_USER }}
+          SCM_PASS: ${{ secrets.AZURE_SCM_PASS }}
+        run: |
+          echo "Deploying to Azure App Service..."
+          curl -s -X POST \
+            -u "$SCM_USER:$SCM_PASS" \
+            --data-binary @deploy.zip \
+            -H "Content-Type: application/zip" \
+            "https://shiftops-app.scm.azurewebsites.net/api/zipdeploy?isAsync=false" \
+            -w "\nHTTP Status: %{http_code}\n" \
+            -o /dev/null
+          echo "Deployment complete"
+
   # ─── E2E Tests (on PR only) ──────────────────────────────────
   test:
     name: Playwright E2E Tests
     runs-on: ubuntu-latest
-    needs: build
+    needs: build-and-deploy
     if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
@@ -57,31 +77,3 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 7
-
-  # ─── Deploy App to Azure (on push to main) ───────────────────
-  deploy-app:
-    name: Deploy to Azure
-    runs-on: ubuntu-latest
-    needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-
-      - run: npm ci
-      - run: npm run build
-
-      - name: Zip deployment package
-        run: |
-          zip -r deploy.zip . -x ".git/*" "test-results/*" "playwright-report/*" ".next/cache/*" "supabase/*" "tests/*" "docs/*" ".claude/*" "screenshots/*"
-
-      - name: Deploy to Azure App Service
-        uses: azure/webapps-deploy@v2
-        with:
-          app-name: shiftops-app
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: deploy.zip
