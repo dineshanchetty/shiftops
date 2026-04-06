@@ -14,6 +14,63 @@ export type Database = {
   }
   public: {
     Tables: {
+      attendance: {
+        Row: {
+          id: string
+          tenant_id: string
+          roster_entry_id: string
+          actual_start: string | null
+          actual_end: string | null
+          actual_hours: number | null
+          status: string | null
+          confirmed_by: string | null
+          confirmed_at: string | null
+          notes: string | null
+          created_at: string | null
+        }
+        Insert: {
+          id?: string
+          tenant_id: string
+          roster_entry_id: string
+          actual_start?: string | null
+          actual_end?: string | null
+          actual_hours?: number | null
+          status?: string | null
+          confirmed_by?: string | null
+          confirmed_at?: string | null
+          notes?: string | null
+          created_at?: string | null
+        }
+        Update: {
+          id?: string
+          tenant_id?: string
+          roster_entry_id?: string
+          actual_start?: string | null
+          actual_end?: string | null
+          actual_hours?: number | null
+          status?: string | null
+          confirmed_by?: string | null
+          confirmed_at?: string | null
+          notes?: string | null
+          created_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "attendance_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "attendance_roster_entry_id_fkey"
+            columns: ["roster_entry_id"]
+            isOneToOne: true
+            referencedRelation: "roster_entries"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       aura_field_mappings: {
         Row: {
           branch_id: string | null
@@ -842,3 +899,4 @@ export type CashupPurchase = Tables<"cashup_purchases">
 export type AuraImport = Tables<"aura_imports">
 export type AuraFieldMapping = Tables<"aura_field_mappings">
 export type BranchPaymentChannel = Tables<"branch_payment_channels">
+export type Attendance = Tables<"attendance">
