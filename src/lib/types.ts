@@ -14,6 +14,48 @@ export type Database = {
   }
   public: {
     Tables: {
+      aura_field_mappings: {
+        Row: {
+          branch_id: string | null
+          created_at: string | null
+          csv_column: string
+          id: string
+          shiftops_field: string
+          tenant_id: string
+        }
+        Insert: {
+          branch_id?: string | null
+          created_at?: string | null
+          csv_column: string
+          id?: string
+          shiftops_field: string
+          tenant_id: string
+        }
+        Update: {
+          branch_id?: string | null
+          created_at?: string | null
+          csv_column?: string
+          id?: string
+          shiftops_field?: string
+          tenant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "aura_field_mappings_branch_id_fkey"
+            columns: ["branch_id"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "aura_field_mappings_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       aura_imports: {
         Row: {
           branch_id: string
@@ -61,6 +103,51 @@ export type Database = {
           },
           {
             foreignKeyName: "aura_imports_tenant_id_fkey"
+            columns: ["tenant_id"]
+            isOneToOne: false
+            referencedRelation: "tenants"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      branch_payment_channels: {
+        Row: {
+          branch_id: string
+          channel_name: string
+          created_at: string | null
+          id: string
+          is_active: boolean | null
+          sort_order: number | null
+          tenant_id: string
+        }
+        Insert: {
+          branch_id: string
+          channel_name: string
+          created_at?: string | null
+          id?: string
+          is_active?: boolean | null
+          sort_order?: number | null
+          tenant_id: string
+        }
+        Update: {
+          branch_id?: string
+          channel_name?: string
+          created_at?: string | null
+          id?: string
+          is_active?: boolean | null
+          sort_order?: number | null
+          tenant_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "branch_payment_channels_branch_id_fkey"
+            columns: ["branch_id"]
+            isOneToOne: false
+            referencedRelation: "branches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "branch_payment_channels_tenant_id_fkey"
             columns: ["tenant_id"]
             isOneToOne: false
             referencedRelation: "tenants"
@@ -732,3 +819,5 @@ export type CashupDriverEntry = Tables<"cashup_driver_entries">
 export type CashupExpense = Tables<"cashup_expenses">
 export type CashupPurchase = Tables<"cashup_purchases">
 export type AuraImport = Tables<"aura_imports">
+export type AuraFieldMapping = Tables<"aura_field_mappings">
+export type BranchPaymentChannel = Tables<"branch_payment_channels">

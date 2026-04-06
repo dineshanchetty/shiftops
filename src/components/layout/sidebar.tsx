@@ -11,6 +11,7 @@ import {
   BarChart3,
   Settings,
   LogOut,
+  Upload,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -28,6 +29,7 @@ const navGroups = [
       { label: 'Dashboard', href: '/app', icon: LayoutDashboard },
       { label: 'Roster', href: '/app/roster', icon: Calendar },
       { label: 'Cashup', href: '/app/cashup', icon: Receipt },
+      { label: 'Aura Upload', href: '/app/aura-upload', icon: Upload },
     ],
   },
   {
