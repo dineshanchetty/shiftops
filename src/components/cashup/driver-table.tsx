@@ -274,6 +274,54 @@ export function DriverTable({
         </table>
       </div>
 
+      {/* Turnover Split Summary */}
+      {entries.length > 1 && (() => {
+        const totalTurnover = entries.reduce((s, e) => s + (e.turnover ?? 0), 0);
+        if (totalTurnover <= 0) return null;
+        const splits = entries
+          .filter((e) => (e.turnover ?? 0) > 0)
+          .map((e) => ({
+            name: e.first_name || "?",
+            turnover: e.turnover ?? 0,
+            pct: ((e.turnover ?? 0) / totalTurnover) * 100,
+          }))
+          .sort((a, b) => b.turnover - a.turnover);
+        if (splits.length === 0) return null;
+        const barColors = [
+          "bg-accent",
+          "bg-blue-500",
+          "bg-emerald-500",
+          "bg-amber-500",
+          "bg-rose-500",
+          "bg-violet-500",
+        ];
+        return (
+          <div className="mt-3 rounded-lg border border-base-200 bg-surface-2 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-base-400 mb-2">
+              Turnover Split
+            </p>
+            <p className="text-sm text-base-700 mb-2">
+              {splits
+                .map(
+                  (s) =>
+                    `${s.name}: R ${s.turnover.toLocaleString("en-ZA", { minimumFractionDigits: 0 })} (${s.pct.toFixed(0)}%)`
+                )
+                .join(" | ")}
+            </p>
+            <div className="h-4 flex rounded-full overflow-hidden">
+              {splits.map((s, i) => (
+                <div
+                  key={s.name}
+                  className={barColors[i % barColors.length]}
+                  style={{ width: `${s.pct}%` }}
+                  title={`${s.name}: ${s.pct.toFixed(1)}%`}
+                />
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
       {!readOnly && (
         <Button
           type="button"

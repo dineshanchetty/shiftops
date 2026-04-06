@@ -9,6 +9,8 @@ import {
   CreditCard,
   Globe,
   AlertTriangle,
+  PieChart,
+  FileSpreadsheet,
 } from "lucide-react";
 
 const reports = [
@@ -67,6 +69,20 @@ const reports = [
       "Flags days where manual cashup data differs from Aura imports.",
     href: "/app/reports/aura-inconsistency",
     icon: AlertTriangle,
+  },
+  {
+    title: "Driver Turnover Splits",
+    description:
+      "How delivery turnover is split between drivers.",
+    href: "/app/reports/driver-splits",
+    icon: PieChart,
+  },
+  {
+    title: "Payroll Export",
+    description:
+      "Export staff hours and wages for Sage Pastel.",
+    href: "/app/reports/payroll-export",
+    icon: FileSpreadsheet,
   },
 ] as const;
 
