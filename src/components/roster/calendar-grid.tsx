@@ -19,16 +19,12 @@ interface CalendarGridProps {
   onDateClick: (date: string) => void;
   loading?: boolean;
   workingDays?: string[];
+  openingTime?: string;
+  closingTime?: string;
 }
 
 const DAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-const POSITION_COLORS: Record<string, string> = {
-  FOH: "#16A34A",
-  BOH: "#2563EB",
-  Driver: "#F5A623",
-  Manager: "#7C3AED",
-};
 
 function toDateStr(d: Date): string {
   const y = d.getFullYear();
@@ -101,23 +97,70 @@ function computeDaySummary(dayEntries: EntryWithStaff[]): DaySummary {
   return { staffCount, totalHours, allFilled, hasEntries: dayEntries.length > 0 };
 }
 
-/* ─── Daily Detail Panel ─── */
+/* ─── Time helpers for Gantt ─── */
+
+/** Parse "HH:MM" to minutes since midnight */
+function parseTimeToMinutes(time: string): number {
+  const [h, m] = time.split(":").map(Number);
+  return h * 60 + (m || 0);
+}
+
+/** Bar color based on position name */
+const GANTT_BAR_COLORS: Record<string, { bg: string; text: string }> = {
+  FOH: { bg: "#16A34A", text: "#FFFFFF" },
+  BOH: { bg: "#2563EB", text: "#FFFFFF" },
+  Driver: { bg: "#F5A623", text: "#FFFFFF" },
+  Manager: { bg: "#7C3AED", text: "#FFFFFF" },
+};
+
+const DEFAULT_BAR_COLOR = { bg: "#9CA3AF", text: "#FFFFFF" };
+
+/* ─── Daily Detail Panel (Gantt Timeline) ─── */
 
 function DailyDetailPanel({
   dateStr,
   entries,
   positions,
   onEditShifts,
+  openingTime,
+  closingTime,
 }: {
   dateStr: string;
   entries: EntryWithStaff[];
   positions: Position[];
   onEditShifts: () => void;
+  openingTime?: string;
+  closingTime?: string;
 }) {
   const workingEntries = entries.filter((e) => !e.is_off);
   const offEntries = entries.filter((e) => e.is_off);
   const totalHours = workingEntries.reduce((sum, e) => sum + (e.shift_hours ?? 0), 0);
   const staffCount = workingEntries.length;
+
+  // Timeline range
+  const rangeStartMin = parseTimeToMinutes(openingTime ?? "06:00");
+  const rangeEndMin = parseTimeToMinutes(closingTime ?? "23:00");
+  const totalRangeMin = rangeEndMin - rangeStartMin;
+
+  // Generate hour markers
+  const startHour = Math.floor(rangeStartMin / 60);
+  const endHour = Math.ceil(rangeEndMin / 60);
+  const hours: number[] = [];
+  for (let h = startHour; h <= endHour; h++) {
+    hours.push(h);
+  }
+
+  // Current time indicator (only if viewing today)
+  const today = new Date();
+  const todayStr = toDateStr(today);
+  const isToday = dateStr === todayStr;
+  let currentTimePercent: number | null = null;
+  if (isToday) {
+    const nowMin = today.getHours() * 60 + today.getMinutes();
+    if (nowMin >= rangeStartMin && nowMin <= rangeEndMin) {
+      currentTimePercent = ((nowMin - rangeStartMin) / totalRangeMin) * 100;
+    }
+  }
 
   return (
     <div className="border-t border-base-200 bg-surface rounded-b-xl overflow-hidden">
@@ -137,8 +180,8 @@ function DailyDetailPanel({
         </Button>
       </div>
 
-      {/* Shift rows */}
-      <div className="px-4 sm:px-6">
+      {/* Gantt Timeline */}
+      <div className="px-4 sm:px-6 py-3">
         {entries.length === 0 ? (
           <div className="py-8 text-center">
             <p className="text-sm text-base-400 mb-3">No shifts scheduled</p>
@@ -148,64 +191,158 @@ function DailyDetailPanel({
             </Button>
           </div>
         ) : (
-          <>
-            {/* Working shifts */}
-            {workingEntries.map((entry) => {
-              const posName = getPositionName(entry.staff.position_id, positions);
-              const dotColor = posName ? POSITION_COLORS[posName] ?? "#9CA3AF" : "#9CA3AF";
-              const fStart = entry.shift_start ? formatTime(entry.shift_start) : "--:--";
-              const fEnd = entry.shift_end ? formatTime(entry.shift_end) : "--:--";
-              const hours = entry.shift_hours ?? 0;
-
-              return (
-                <div
-                  key={entry.id}
-                  className="flex items-center gap-4 py-3 border-b border-gray-100 last:border-b-0"
-                >
-                  <span
-                    className="inline-block h-2.5 w-2.5 rounded-full shrink-0"
-                    style={{ backgroundColor: dotColor }}
-                  />
-                  <span className="text-sm font-medium text-base-900 min-w-[180px] sm:min-w-[220px] truncate">
-                    {entry.staff.first_name} {entry.staff.last_name}
-                  </span>
-                  <span className="text-xs text-base-500 min-w-[60px] hidden sm:inline">
-                    {posName ?? "—"}
-                  </span>
-                  <span className="text-sm font-mono text-base-700 min-w-[110px]">
-                    {fStart} &ndash; {fEnd}
-                  </span>
-                  <span className="text-xs bg-gray-100 rounded px-1.5 py-0.5 text-gray-600 font-mono">
-                    {Math.round(hours)}h
-                  </span>
+          <div className="overflow-x-auto">
+            <div className="min-w-[600px]">
+              {/* Hour header row */}
+              <div className="flex">
+                <div className="w-[140px] sm:w-[180px] shrink-0" />
+                <div className="flex-1 relative h-6">
+                  {hours.map((h) => {
+                    const pct = ((h * 60 - rangeStartMin) / totalRangeMin) * 100;
+                    if (pct < 0 || pct > 100) return null;
+                    return (
+                      <span
+                        key={h}
+                        className="absolute text-[10px] font-mono text-base-400 -translate-x-1/2"
+                        style={{ left: `${pct}%` }}
+                      >
+                        {String(h).padStart(2, "0")}
+                      </span>
+                    );
+                  })}
                 </div>
-              );
-            })}
+              </div>
 
-            {/* OFF entries */}
-            {offEntries.map((entry) => {
-              const posName = getPositionName(entry.staff.position_id, positions);
-              const dotColor = posName ? POSITION_COLORS[posName] ?? "#9CA3AF" : "#9CA3AF";
+              {/* Staff rows */}
+              {workingEntries.map((entry) => {
+                const posName = getPositionName(entry.staff.position_id, positions);
+                const colors = posName ? GANTT_BAR_COLORS[posName] ?? DEFAULT_BAR_COLOR : DEFAULT_BAR_COLOR;
+                const firstName = entry.staff.first_name;
+                const lastInitial = entry.staff.last_name?.[0] ?? "";
+                const label = `${firstName} ${lastInitial}.`;
+                const fStart = entry.shift_start ? formatTime(entry.shift_start) : "--:--";
+                const fEnd = entry.shift_end ? formatTime(entry.shift_end) : "--:--";
+                const hoursVal = entry.shift_hours ?? 0;
 
-              return (
-                <div
-                  key={entry.id}
-                  className="flex items-center gap-4 py-3 border-b border-gray-100 last:border-b-0 opacity-50"
-                >
-                  <span
-                    className="inline-block h-2.5 w-2.5 rounded-full shrink-0"
-                    style={{ backgroundColor: dotColor }}
-                  />
-                  <span className="text-sm font-medium text-base-500 min-w-[180px] sm:min-w-[220px] truncate">
-                    {entry.staff.first_name} {entry.staff.last_name}
-                  </span>
-                  <span className="text-xs bg-base-200 text-base-500 rounded px-1.5 py-0.5 font-semibold">
-                    OFF
-                  </span>
+                // Calculate bar position
+                let barLeft = 0;
+                let barWidth = 0;
+                let hasBar = false;
+                if (entry.shift_start && entry.shift_end) {
+                  const startMin = parseTimeToMinutes(entry.shift_start);
+                  const endMin = parseTimeToMinutes(entry.shift_end);
+                  barLeft = Math.max(0, ((startMin - rangeStartMin) / totalRangeMin) * 100);
+                  barWidth = Math.min(100 - barLeft, ((endMin - startMin) / totalRangeMin) * 100);
+                  hasBar = barWidth > 0;
+                }
+
+                return (
+                  <div key={entry.id} className="flex items-center group">
+                    {/* Staff name */}
+                    <div className="w-[140px] sm:w-[180px] shrink-0 pr-3 py-1">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="inline-block h-2 w-2 rounded-full shrink-0"
+                          style={{ backgroundColor: colors.bg }}
+                        />
+                        <span className="text-xs font-medium text-base-700 truncate">
+                          {entry.staff.first_name} {entry.staff.last_name}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Timeline area */}
+                    <div className="flex-1 relative h-[36px]">
+                      {/* Hour grid lines */}
+                      {hours.map((h) => {
+                        const pct = ((h * 60 - rangeStartMin) / totalRangeMin) * 100;
+                        if (pct <= 0 || pct >= 100) return null;
+                        return (
+                          <div
+                            key={h}
+                            className="absolute top-0 bottom-0 w-px bg-gray-100"
+                            style={{ left: `${pct}%` }}
+                          />
+                        );
+                      })}
+
+                      {/* Current time line */}
+                      {currentTimePercent !== null && (
+                        <div
+                          className="absolute top-0 bottom-0 w-px border-l border-dashed border-red-500 z-10"
+                          style={{ left: `${currentTimePercent}%` }}
+                        />
+                      )}
+
+                      {/* Shift bar */}
+                      {hasBar && (
+                        <div
+                          className="absolute top-[4px] h-[28px] rounded-md shadow-sm flex items-center px-2 overflow-hidden cursor-default transition-opacity"
+                          style={{
+                            left: `${barLeft}%`,
+                            width: `${barWidth}%`,
+                            backgroundColor: colors.bg,
+                          }}
+                          title={`${entry.staff.first_name} ${entry.staff.last_name} | ${posName ?? "—"} | ${fStart}–${fEnd} (${Math.round(hoursVal)}h)`}
+                        >
+                          {barWidth > 8 && (
+                            <span
+                              className="text-[10px] font-medium truncate leading-none"
+                              style={{ color: colors.text }}
+                            >
+                              {label}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* No bar fallback: show time text */}
+                      {!hasBar && (
+                        <div className="absolute inset-0 flex items-center">
+                          <span className="text-[10px] text-base-400 font-mono">
+                            {fStart}–{fEnd}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* OFF entries */}
+              {offEntries.map((entry) => (
+                <div key={entry.id} className="flex items-center opacity-50">
+                  <div className="w-[140px] sm:w-[180px] shrink-0 pr-3 py-1">
+                    <div className="flex items-center gap-2">
+                      <span className="inline-block h-2 w-2 rounded-full shrink-0 bg-gray-300" />
+                      <span className="text-xs font-medium text-base-400 truncate line-through">
+                        {entry.staff.first_name} {entry.staff.last_name}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex-1 relative h-[36px]">
+                    {/* Hour grid lines */}
+                    {hours.map((h) => {
+                      const pct = ((h * 60 - rangeStartMin) / totalRangeMin) * 100;
+                      if (pct <= 0 || pct >= 100) return null;
+                      return (
+                        <div
+                          key={h}
+                          className="absolute top-0 bottom-0 w-px bg-gray-100"
+                          style={{ left: `${pct}%` }}
+                        />
+                      );
+                    })}
+                    <div className="absolute inset-0 flex items-center">
+                      <span className="text-[10px] font-semibold text-base-400 bg-base-100 rounded px-1.5 py-0.5">
+                        OFF
+                      </span>
+                    </div>
+                  </div>
                 </div>
-              );
-            })}
-          </>
+              ))}
+            </div>
+          </div>
         )}
       </div>
     </div>
@@ -221,6 +358,8 @@ export function CalendarGrid({
   onDateClick,
   loading = false,
   workingDays,
+  openingTime,
+  closingTime,
 }: CalendarGridProps) {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
@@ -475,6 +614,8 @@ export function CalendarGrid({
           entries={selectedEntries}
           positions={positions}
           onEditShifts={handleEditShifts}
+          openingTime={openingTime}
+          closingTime={closingTime}
         />
       )}
     </div>

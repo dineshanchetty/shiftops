@@ -16,11 +16,13 @@ import {
   loadCashup,
   checkAuraImport,
   getDriversFromRoster,
+  getRosteredStaff,
   getPaymentChannels,
   getUserBranches,
   unlockCashup,
   type CashupWithRelations,
   type DriverFromRoster,
+  type RosteredStaffEntry,
 } from "./actions";
 import type { AuraImport } from "@/lib/types";
 
@@ -41,6 +43,7 @@ export default function CashupPage() {
   const [auraImport, setAuraImport] = useState<AuraImport | null>(null);
   const [drivers, setDrivers] = useState<DriverFromRoster[]>([]);
   const [channels, setChannels] = useState<{ channel_name: string }[]>([]);
+  const [rosteredStaff, setRosteredStaff] = useState<RosteredStaffEntry[]>([]);
   const [status, setStatus] = useState<StatusBanner>(null);
   const [loaded, setLoaded] = useState(false);
   const [formKey, setFormKey] = useState(0);
@@ -68,18 +71,20 @@ export default function CashupPage() {
     if (!branchId || !date) return;
 
     startTransition(async () => {
-      const [cashupData, auraData, driverData, channelData] =
+      const [cashupData, auraData, driverData, channelData, staffData] =
         await Promise.all([
           loadCashup(branchId, date),
           checkAuraImport(branchId, date),
           getDriversFromRoster(branchId, date),
           getPaymentChannels(branchId),
+          getRosteredStaff(branchId, date),
         ]);
 
       setCashup(cashupData);
       setAuraImport(auraData);
       setDrivers(driverData);
       setChannels(channelData);
+      setRosteredStaff(staffData);
 
       if (cashupData?.status === "submitted") {
         setStatus("submitted");
@@ -200,6 +205,7 @@ export default function CashupPage() {
           drivers={drivers}
           channels={channels}
           readOnly={status === "submitted"}
+          rosteredStaff={rosteredStaff}
         />
       )}
 

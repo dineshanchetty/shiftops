@@ -28,6 +28,17 @@ export interface DriverFromRoster {
   last_name: string;
 }
 
+export interface RosteredStaffEntry {
+  staff_id: string;
+  first_name: string;
+  last_name: string;
+  position_name: string | null;
+  shift_start: string | null;
+  shift_end: string | null;
+  shift_hours: number | null;
+  is_off: boolean;
+}
+
 export interface SaveCashupInput {
   id?: string;
   branch_id: string;
@@ -417,6 +428,58 @@ export async function submitCashup(cashupId: string) {
 
   if (error) return { success: false, error: error.message };
   return { success: true };
+}
+
+// ─── Get ALL rostered staff for attendance ───────────────────────────────────
+
+export async function getRosteredStaff(
+  branchId: string,
+  date: string
+): Promise<RosteredStaffEntry[]> {
+  const supabase = await createClient();
+
+  const { data: tenantId } = await supabase.rpc("get_user_tenant_id");
+  if (!tenantId) return [];
+
+  // Get all roster entries for this branch + date, with staff and position info
+  const { data: rosterEntries } = await supabase
+    .from("roster_entries")
+    .select("*, staff:staff(id, first_name, last_name, position_id, position:positions(name))")
+    .eq("branch_id", branchId)
+    .eq("date", date)
+    .eq("tenant_id", tenantId);
+
+  if (!rosterEntries) return [];
+
+  const seen = new Set<string>();
+  const result: RosteredStaffEntry[] = [];
+
+  for (const entry of rosterEntries) {
+    const staff = entry.staff as unknown as {
+      id: string;
+      first_name: string;
+      last_name: string;
+      position_id: string | null;
+      position: { name: string } | null;
+    } | null;
+
+    if (!staff) continue;
+    if (seen.has(staff.id)) continue;
+    seen.add(staff.id);
+
+    result.push({
+      staff_id: staff.id,
+      first_name: staff.first_name,
+      last_name: staff.last_name,
+      position_name: staff.position?.name ?? null,
+      shift_start: entry.shift_start,
+      shift_end: entry.shift_end,
+      shift_hours: entry.shift_hours,
+      is_off: entry.is_off ?? false,
+    });
+  }
+
+  return result;
 }
 
 // ─── Unlock cashup ────────────────────────────────────────────────────────────

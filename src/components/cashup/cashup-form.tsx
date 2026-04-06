@@ -14,8 +14,10 @@ import {
   submitCashup,
   type CashupWithRelations,
   type DriverFromRoster,
+  type RosteredStaffEntry,
   type SaveCashupInput,
 } from "@/app/app/cashup/actions";
+import { AttendanceTable } from "./attendance-table";
 import type { AuraImport } from "@/lib/types";
 
 // ─── Channel display names ───────────────────────────────────────────────────
@@ -30,13 +32,14 @@ const CHANNEL_LABELS: Record<string, string> = {
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────
 
-type CashupTab = "takings" | "drivers" | "banking" | "purchases";
+type CashupTab = "takings" | "drivers" | "banking" | "purchases" | "attendance";
 
 const TABS: { key: CashupTab; label: string }[] = [
   { key: "takings", label: "Takings" },
   { key: "drivers", label: "Drivers" },
   { key: "banking", label: "Banking" },
   { key: "purchases", label: "Purchases" },
+  { key: "attendance", label: "Attendance" },
 ];
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -49,6 +52,7 @@ interface CashupFormProps {
   drivers: DriverFromRoster[];
   channels: { channel_name: string }[];
   readOnly: boolean;
+  rosteredStaff?: RosteredStaffEntry[];
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -61,6 +65,7 @@ export function CashupForm({
   drivers,
   channels,
   readOnly: initialReadOnly,
+  rosteredStaff = [],
 }: CashupFormProps) {
   const isAura = !!auraImport;
   const [isPending, startTransition] = useTransition();
@@ -617,6 +622,16 @@ export function CashupForm({
               />
             </div>
           </div>
+        </div>
+
+        {/* ── Tab: Attendance ───────────────────────────────────────── */}
+        <div className={activeTab === "attendance" ? "block" : "hidden"}>
+          <AttendanceTable
+            rosteredStaff={rosteredStaff}
+            date={date}
+            branchId={branchId}
+            readOnly={readOnly}
+          />
         </div>
 
         {/* ── Actions ────────────────────────────────────────────────── */}

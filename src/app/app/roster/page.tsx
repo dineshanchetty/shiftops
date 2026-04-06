@@ -254,18 +254,20 @@ export default function RosterPage() {
         </Button>
       }
     >
-      {/* Filter Bar */}
-      <FilterBar
-        branches={branches}
-        positions={positions}
-        subPositions={subPositions}
-        filters={filters}
-        onFilterChange={setFilters}
-      />
+      {/* Filter Bar — sticky so calendar scrolls underneath */}
+      <div className="sticky top-0 z-10 bg-gray-50 pb-3 -mx-4 px-4 md:-mx-6 md:px-6 lg:-mx-8 lg:px-8 pt-1">
+        <FilterBar
+          branches={branches}
+          positions={positions}
+          subPositions={subPositions}
+          filters={filters}
+          onFilterChange={setFilters}
+        />
 
-      {/* Summary */}
-      <div className="mt-4">
-        <RosterSummary totalScheduledHours={totalScheduledHours} staffCount={uniqueStaffCount} />
+        {/* Summary */}
+        <div className="mt-3">
+          <RosterSummary totalScheduledHours={totalScheduledHours} staffCount={uniqueStaffCount} />
+        </div>
       </div>
 
       {/* Calendar Grid */}
