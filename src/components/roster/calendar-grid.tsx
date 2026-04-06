@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { Plus } from "lucide-react";
 import { ShiftChip } from "./shift-chip";
-import type { RosterEntry, Staff } from "@/lib/types";
+import type { RosterEntry, Staff, Position } from "@/lib/types";
 
 type EntryWithStaff = RosterEntry & {
   staff: { first_name: string; last_name: string; position_id: string | null; sub_position_id: string | null };
@@ -13,9 +13,11 @@ type EntryWithStaff = RosterEntry & {
 interface CalendarGridProps {
   entries: EntryWithStaff[];
   staff: Staff[];
+  positions?: Position[];
   dateRange: { start: Date; end: Date };
   onDateClick: (date: string) => void;
   loading?: boolean;
+  workingDays?: string[];
 }
 
 const DAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -63,11 +65,18 @@ function buildWeeks(start: Date, end: Date): (Date | null)[][] {
   return weeks;
 }
 
+function getPositionName(positionId: string | null | undefined, positions: Position[]): string | undefined {
+  if (!positionId || positions.length === 0) return undefined;
+  return positions.find((p) => p.id === positionId)?.name;
+}
+
 export function CalendarGrid({
   entries,
+  positions = [],
   dateRange,
   onDateClick,
   loading = false,
+  workingDays,
 }: CalendarGridProps) {
   const today = useMemo(() => new Date(), []);
   const todayStr = toDateStr(today);
@@ -97,11 +106,17 @@ export function CalendarGrid({
   const isTodayInRange =
     today >= dateRange.start && today <= dateRange.end;
 
+  // Build a set of non-working day abbreviations for quick lookup
+  const workingDaySet = useMemo(() => {
+    if (!workingDays) return null; // no filtering when prop not provided
+    return new Set(workingDays);
+  }, [workingDays]);
+
   if (loading) {
     return (
-      <div className="rounded-xl border border-base-200 overflow-hidden">
+      <div className="rounded-xl border border-base-200 overflow-hidden overflow-x-auto">
         {/* Header */}
-        <div className="grid grid-cols-7 bg-base-800">
+        <div className="grid bg-base-800" style={{ gridTemplateColumns: "repeat(7, minmax(140px, 1fr))" }}>
           {DAY_HEADERS.map((d) => (
             <div
               key={d}
@@ -113,7 +128,7 @@ export function CalendarGrid({
         </div>
         {/* Skeleton rows */}
         {Array.from({ length: 5 }).map((_, wi) => (
-          <div key={wi} className="grid grid-cols-7">
+          <div key={wi} className="grid" style={{ gridTemplateColumns: "repeat(7, minmax(140px, 1fr))" }}>
             {Array.from({ length: 7 }).map((_, di) => (
               <div
                 key={di}
@@ -135,11 +150,11 @@ export function CalendarGrid({
   // Always render the full calendar grid — even with no entries,
   // so users can click dates to add their first shifts.
   return (
-    <div className="rounded-xl border border-base-200 overflow-hidden">
+    <div className="rounded-xl border border-base-200 overflow-hidden overflow-x-auto">
       {/* Desktop view */}
       <div className="hidden md:block">
         {/* Header */}
-        <div className="grid grid-cols-7 bg-base-800">
+        <div className="grid bg-base-800" style={{ gridTemplateColumns: "repeat(7, minmax(140px, 1fr))" }}>
           {DAY_HEADERS.map((d, i) => (
             <div
               key={d}
@@ -155,7 +170,7 @@ export function CalendarGrid({
 
         {/* Weeks */}
         {weeks.map((week, wi) => (
-          <div key={wi} className="grid grid-cols-7">
+          <div key={wi} className="grid" style={{ gridTemplateColumns: "repeat(7, minmax(140px, 1fr))" }}>
             {week.map((date, di) => {
               if (!date) {
                 return (
@@ -169,6 +184,8 @@ export function CalendarGrid({
               const dateStr = toDateStr(date);
               const dayEntries = entriesByDate.get(dateStr) ?? [];
               const isToday = dateStr === todayStr;
+              const dayAbbr = DAY_HEADERS[di];
+              const isNonWorkingDay = workingDaySet ? !workingDaySet.has(dayAbbr) : false;
               const totalHours = dayEntries.reduce(
                 (sum, e) => sum + (e.is_off ? 0 : (e.shift_hours ?? 0)),
                 0
@@ -179,9 +196,11 @@ export function CalendarGrid({
                   key={di}
                   onClick={() => onDateClick(dateStr)}
                   className={cn(
-                    "min-h-[100px] border-r border-b border-gray-200 p-2 text-left transition-colors hover:bg-surface-2 group relative",
-                    isToday && "bg-blue-50/60",
-                    isTodayInRange && di === todayColIndex && !isToday && "bg-blue-50/20"
+                    "min-h-[100px] border-r border-b border-gray-200 p-2 text-left transition-colors group relative",
+                    isToday && "bg-blue-50",
+                    isTodayInRange && di === todayColIndex && !isToday && "bg-blue-50/20",
+                    isNonWorkingDay && "bg-gray-100 opacity-60",
+                    !isNonWorkingDay && !isToday && "hover:bg-gray-50"
                   )}
                 >
                   {/* Date number */}
@@ -197,7 +216,7 @@ export function CalendarGrid({
                       {date.getDate()}
                     </span>
                     {dayEntries.length === 0 && (
-                      <span className="opacity-0 group-hover:opacity-100 transition-opacity">
+                      <span className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
                         <Plus size={14} className="text-base-400" />
                       </span>
                     )}
@@ -209,6 +228,7 @@ export function CalendarGrid({
                       <ShiftChip
                         key={entry.id}
                         staffName={`${entry.staff.first_name} ${entry.staff.last_name.charAt(0)}.`}
+                        positionName={getPositionName(entry.staff.position_id, positions)}
                         shiftStart={entry.shift_start}
                         shiftEnd={entry.shift_end}
                         shiftHours={entry.shift_hours}
@@ -305,6 +325,7 @@ export function CalendarGrid({
                         <ShiftChip
                           key={entry.id}
                           staffName={`${entry.staff.first_name} ${entry.staff.last_name.charAt(0)}.`}
+                          positionName={getPositionName(entry.staff.position_id, positions)}
                           shiftStart={entry.shift_start}
                           shiftEnd={entry.shift_end}
                           shiftHours={entry.shift_hours}

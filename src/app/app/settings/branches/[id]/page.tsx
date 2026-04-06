@@ -20,7 +20,9 @@ import {
 import { cn, formatDate } from "@/lib/utils";
 import type { Branch, AuraImport } from "@/lib/types";
 
-type Tab = "general" | "aura";
+type Tab = "general" | "operations" | "aura";
+
+const ALL_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 export default function BranchDetailPage() {
   const params = useParams();
@@ -43,6 +45,11 @@ export default function BranchDetailPage() {
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
 
+  // Form state for operations
+  const [workingDays, setWorkingDays] = useState<string[]>(ALL_DAYS);
+  const [openingTime, setOpeningTime] = useState("06:00");
+  const [closingTime, setClosingTime] = useState("23:00");
+
   // Form state for Aura SFTP
   const [sftpHost, setSftpHost] = useState("");
   const [sftpUser, setSftpUser] = useState("");
@@ -62,6 +69,9 @@ export default function BranchDetailPage() {
       setBranch(data);
       setName(data.name);
       setAddress(data.address ?? "");
+      setWorkingDays(data.working_days ?? ALL_DAYS);
+      setOpeningTime(data.opening_time ? data.opening_time.slice(0, 5) : "06:00");
+      setClosingTime(data.closing_time ? data.closing_time.slice(0, 5) : "23:00");
       setSftpHost(data.aura_ftp_host ?? "");
       setSftpUser(data.aura_ftp_user ?? "");
       setSftpPass(""); // Never pre-fill password
@@ -99,6 +109,27 @@ export default function BranchDetailPage() {
       setSaveMessage("Failed to save: " + error.message);
     } else {
       setSaveMessage("Branch details saved.");
+    }
+  }
+
+  async function handleSaveOperations() {
+    setSaving(true);
+    setSaveMessage(null);
+    const { error } = await supabase
+      .from("branches")
+      .update({
+        working_days: workingDays,
+        opening_time: openingTime,
+        closing_time: closingTime,
+      })
+      .eq("id", branchId);
+
+    setSaving(false);
+    if (error) {
+      setSaveMessage("Failed to save: " + error.message);
+    } else {
+      setSaveMessage("Operations settings saved.");
+      await loadBranch();
     }
   }
 
@@ -191,6 +222,7 @@ export default function BranchDetailPage() {
         {(
           [
             { key: "general", label: "General" },
+            { key: "operations", label: "Operations" },
             { key: "aura", label: "Aura Integration" },
           ] as const
         ).map((t) => (
@@ -244,6 +276,82 @@ export default function BranchDetailPage() {
             </Button>
           </CardContent>
         </Card>
+      )}
+
+      {tab === "operations" && (
+        <div className="space-y-6">
+          {/* Working Days */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Working Days</CardTitle>
+            </CardHeader>
+            <CardContent className="max-w-lg">
+              <div className="flex flex-wrap gap-3">
+                {ALL_DAYS.map((day) => (
+                  <label
+                    key={day}
+                    className="flex items-center gap-2 cursor-pointer"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={workingDays.includes(day)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setWorkingDays((prev) => [...prev, day]);
+                        } else {
+                          setWorkingDays((prev) =>
+                            prev.filter((d) => d !== day)
+                          );
+                        }
+                      }}
+                      className="h-4 w-4 rounded border-base-300 text-accent focus:ring-accent"
+                    />
+                    <span className="text-sm text-base-700">{day}</span>
+                  </label>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Operating Hours */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Operating Hours</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4 max-w-lg">
+              <div>
+                <label className="text-sm font-medium text-base-700 mb-1 block">
+                  Opening Time
+                </label>
+                <input
+                  type="time"
+                  value={openingTime}
+                  onChange={(e) => setOpeningTime(e.target.value)}
+                  className="h-10 w-full rounded-lg border border-base-200 bg-surface px-3 text-sm font-mono text-base-900 focus:outline-none focus:ring-2 focus:ring-accent focus:border-accent"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-medium text-base-700 mb-1 block">
+                  Closing Time
+                </label>
+                <input
+                  type="time"
+                  value={closingTime}
+                  onChange={(e) => setClosingTime(e.target.value)}
+                  className="h-10 w-full rounded-lg border border-base-200 bg-surface px-3 text-sm font-mono text-base-900 focus:outline-none focus:ring-2 focus:ring-accent focus:border-accent"
+                />
+              </div>
+              <Button
+                onClick={handleSaveOperations}
+                disabled={saving}
+                className="mt-2"
+              >
+                <Save size={16} />
+                {saving ? "Saving..." : "Save Operations"}
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       {tab === "aura" && (

@@ -652,7 +652,7 @@ async function handleFinalSubmit(
     p_brands: brands,
     p_branch_name: branchData.branchName,
     p_branch_brand: branchData.brandId,
-    p_branch_address: branchData.address || null,
+    p_branch_address: branchData.address || undefined,
   });
 
   if (error) {

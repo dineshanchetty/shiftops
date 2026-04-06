@@ -33,6 +33,9 @@ export default function RosterPage() {
   const [tenantId, setTenantId] = useState<string>("");
   const [branchName, setBranchName] = useState<string>("");
 
+  // Selected branch operations data
+  const [selectedBranchData, setSelectedBranchData] = useState<Branch | null>(null);
+
   // Roster data
   const [entries, setEntries] = useState<EntryWithStaff[]>([]);
   const [loading, setLoading] = useState(true);
@@ -134,10 +137,25 @@ export default function RosterPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.branchId]);
 
-  // Update branch name when branch changes
+  // Update branch name and fetch full branch data when branch changes
   useEffect(() => {
     const branch = branches.find((b) => b.id === filters.branchId);
     setBranchName(branch?.name ?? "");
+
+    async function loadBranchData() {
+      if (!filters.branchId) {
+        setSelectedBranchData(null);
+        return;
+      }
+      const { data } = await supabase
+        .from("branches")
+        .select("*")
+        .eq("id", filters.branchId)
+        .single();
+      if (data) setSelectedBranchData(data);
+    }
+    loadBranchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.branchId, branches]);
 
   // Load roster entries
@@ -245,9 +263,11 @@ export default function RosterPage() {
       <CalendarGrid
         entries={entries}
         staff={staff}
+        positions={positions}
         dateRange={dateRange}
         onDateClick={(date) => setEditorDate(date)}
         loading={loading}
+        workingDays={selectedBranchData?.working_days ?? undefined}
       />
 
       {/* Shift Editor slide-over */}
@@ -258,6 +278,9 @@ export default function RosterPage() {
           tenantId={tenantId}
           entries={editorEntries}
           staff={staff}
+          positions={positions}
+          defaultStartTime={selectedBranchData?.opening_time ? selectedBranchData.opening_time.slice(0, 5) : undefined}
+          defaultEndTime={selectedBranchData?.closing_time ? selectedBranchData.closing_time.slice(0, 5) : undefined}
           onSave={handleShiftSave}
           onClose={() => setEditorDate(null)}
         />

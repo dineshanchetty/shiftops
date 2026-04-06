@@ -18,9 +18,10 @@ export function AppShellClient({
   userName,
   planName,
   tenantLogoUrl,
-  branches,
+  branches: _branches,
   children,
 }: AppShellClientProps) {
+  void _branches; // Available for future branch switcher integration
   const pathname = usePathname();
 
   return (

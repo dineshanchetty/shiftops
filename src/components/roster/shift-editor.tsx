@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { X, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { RosterEntry, Staff } from "@/lib/types";
+import type { RosterEntry, Staff, Position } from "@/lib/types";
 import { format, parseISO } from "date-fns";
 
 type EntryWithStaff = RosterEntry & {
@@ -14,6 +14,7 @@ type EntryWithStaff = RosterEntry & {
 interface ShiftRow {
   id?: string;
   staffId: string;
+  positionFilter: string; // "" means "All Positions"
   shiftStart: string;
   shiftEnd: string;
   shiftHours: number;
@@ -27,6 +28,9 @@ interface ShiftEditorProps {
   tenantId: string;
   entries: EntryWithStaff[];
   staff: Staff[];
+  positions?: Position[];
+  defaultStartTime?: string;
+  defaultEndTime?: string;
   onSave: (
     entries: {
       id?: string;
@@ -59,6 +63,9 @@ export function ShiftEditor({
   tenantId,
   entries,
   staff,
+  positions = [],
+  defaultStartTime = "",
+  defaultEndTime = "",
   onSave,
   onClose,
 }: ShiftEditorProps) {
@@ -71,6 +78,7 @@ export function ShiftEditor({
         entries.map((e) => ({
           id: e.id,
           staffId: e.staff_id,
+          positionFilter: "",
           shiftStart: e.shift_start ? e.shift_start.slice(0, 5) : "",
           shiftEnd: e.shift_end ? e.shift_end.slice(0, 5) : "",
           shiftHours: e.shift_hours ?? 0,
@@ -78,17 +86,19 @@ export function ShiftEditor({
         }))
       );
     } else {
+      const startHrs = calcHours(defaultStartTime, defaultEndTime);
       setRows([
         {
           staffId: "",
-          shiftStart: "",
-          shiftEnd: "",
-          shiftHours: 0,
+          positionFilter: "",
+          shiftStart: defaultStartTime,
+          shiftEnd: defaultEndTime,
+          shiftHours: startHrs,
           isOff: false,
         },
       ]);
     }
-  }, [entries]);
+  }, [entries, defaultStartTime, defaultEndTime]);
 
   const handleRowChange = useCallback(
     (index: number, partial: Partial<ShiftRow>) => {
@@ -119,13 +129,15 @@ export function ShiftEditor({
   );
 
   function addRow() {
+    const hrs = calcHours(defaultStartTime, defaultEndTime);
     setRows((prev) => [
       ...prev,
       {
         staffId: "",
-        shiftStart: "",
-        shiftEnd: "",
-        shiftHours: 0,
+        positionFilter: "",
+        shiftStart: defaultStartTime,
+        shiftEnd: defaultEndTime,
+        shiftHours: hrs,
         isOff: false,
       },
     ]);
@@ -244,6 +256,32 @@ export function ShiftEditor({
                   key={row.id ?? `new-${visualIndex}`}
                   className="rounded-xl border border-base-200 p-4 bg-surface-2"
                 >
+                  {/* Position filter */}
+                  {positions.length > 0 && (
+                    <div className="mb-3">
+                      <label className="text-xs font-medium text-base-600 mb-1 block">
+                        Position
+                      </label>
+                      <select
+                        value={row.positionFilter}
+                        onChange={(e) =>
+                          handleRowChange(actualIndex, {
+                            positionFilter: e.target.value,
+                            staffId: "", // reset staff when position changes
+                          })
+                        }
+                        className={cn(selectClass, "w-full")}
+                      >
+                        <option value="">All Positions</option>
+                        {positions.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
                   {/* Staff select */}
                   <div className="mb-3">
                     <label className="text-xs font-medium text-base-600 mb-1 block">
@@ -258,7 +296,11 @@ export function ShiftEditor({
                     >
                       <option value="">Select staff...</option>
                       {staff
-                        .filter((s) => s.active !== false)
+                        .filter((s) => {
+                          if (s.active === false) return false;
+                          if (row.positionFilter && s.position_id !== row.positionFilter) return false;
+                          return true;
+                        })
                         .map((s) => (
                           <option key={s.id} value={s.id}>
                             {s.first_name} {s.last_name}

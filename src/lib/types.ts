@@ -163,11 +163,14 @@ export type Database = {
           aura_ftp_pass_encrypted: string | null
           aura_ftp_user: string | null
           brand_id: string
+          closing_time: string | null
           created_at: string | null
           id: string
           name: string
+          opening_time: string | null
           tenant_id: string
           timezone: string | null
+          working_days: string[] | null
         }
         Insert: {
           address?: string | null
@@ -176,11 +179,14 @@ export type Database = {
           aura_ftp_pass_encrypted?: string | null
           aura_ftp_user?: string | null
           brand_id: string
+          closing_time?: string | null
           created_at?: string | null
           id?: string
           name: string
+          opening_time?: string | null
           tenant_id: string
           timezone?: string | null
+          working_days?: string[] | null
         }
         Update: {
           address?: string | null
@@ -189,11 +195,14 @@ export type Database = {
           aura_ftp_pass_encrypted?: string | null
           aura_ftp_user?: string | null
           brand_id?: string
+          closing_time?: string | null
           created_at?: string | null
           id?: string
           name?: string
+          opening_time?: string | null
           tenant_id?: string
           timezone?: string | null
+          working_days?: string[] | null
         }
         Relationships: [
           {
@@ -785,6 +794,18 @@ export type Database = {
       get_user_branch_ids: { Args: Record<string, never>; Returns: string[] }
       get_user_role: { Args: Record<string, never>; Returns: string }
       get_user_tenant_id: { Args: Record<string, never>; Returns: string }
+      setup_tenant: {
+        Args: {
+          p_branch_address?: string
+          p_branch_brand: string
+          p_branch_name: string
+          p_brands: string[]
+          p_name: string
+          p_slug: string
+          p_user_id: string
+        }
+        Returns: string
+      }
     }
     Enums: {
       [_ in never]: never
