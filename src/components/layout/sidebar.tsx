@@ -114,7 +114,7 @@ export function Sidebar({
                       className={cn(
                         'flex items-center gap-3 px-5 py-2 text-sm transition-colors',
                         isActive
-                          ? 'border-l-[3px] border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-white pl-[17px]'
+                          ? 'border-l-[3px] border-[var(--color-accent)] bg-white/10 text-white font-medium pl-[17px]'
                           : 'border-l-[3px] border-transparent text-gray-400 hover:text-white hover:bg-white/5 pl-[17px]'
                       )}
                     >
