@@ -132,35 +132,8 @@ export function CalendarGrid({
     );
   }
 
-  if (entries.length === 0) {
-    return (
-      <div className="rounded-xl border border-base-200 overflow-hidden">
-        {/* Header */}
-        <div className="grid grid-cols-7 bg-base-800">
-          {DAY_HEADERS.map((d) => (
-            <div
-              key={d}
-              className="px-2 py-2 text-center text-xs font-semibold uppercase text-white"
-            >
-              {d}
-            </div>
-          ))}
-        </div>
-        <div className="flex flex-col items-center justify-center py-20 text-center">
-          <div className="h-16 w-16 rounded-full bg-base-200 flex items-center justify-center mb-4">
-            <Plus size={24} className="text-base-400" />
-          </div>
-          <p className="text-base font-medium text-base-700">
-            No shifts scheduled
-          </p>
-          <p className="text-sm text-base-400 mt-1">
-            Click on a date in the calendar to add shifts
-          </p>
-        </div>
-      </div>
-    );
-  }
-
+  // Always render the full calendar grid — even with no entries,
+  // so users can click dates to add their first shifts.
   return (
     <div className="rounded-xl border border-base-200 overflow-hidden">
       {/* Desktop view */}
