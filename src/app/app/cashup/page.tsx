@@ -8,6 +8,7 @@ import {
   CloudDownload,
   Loader2,
   Pencil,
+  Eye,
 } from "lucide-react";
 import { PageShell } from "@/components/layout/page-shell";
 import { Button } from "@/components/ui/button";
@@ -20,11 +21,14 @@ import {
   getPaymentChannels,
   getUserBranches,
   unlockCashup,
+  getCashupHistory,
   type CashupWithRelations,
+  type CashupHistoryRow,
   type DriverFromRoster,
   type RosteredStaffEntry,
 } from "./actions";
 import type { AuraImport } from "@/lib/types";
+import { formatCurrency, formatDate } from "@/lib/utils";
 
 type StatusBanner = "aura" | "manual" | "submitted" | null;
 
@@ -48,6 +52,10 @@ export default function CashupPage() {
   const [loaded, setLoaded] = useState(false);
   const [formKey, setFormKey] = useState(0);
 
+  // ─── Cashup history ────────────────────────────────────────────────
+  const [history, setHistory] = useState<CashupHistoryRow[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
   // ─── Load branches on first mount ───────────────────────────────────
   useEffect(() => {
     if (branchesLoaded) return;
@@ -66,38 +74,69 @@ export default function CashupPage() {
     });
   }, [branchesLoaded]);
 
+  // ─── Auto-load cashup history when branch changes ──────────────────
+  useEffect(() => {
+    if (!branchId) {
+      setHistory([]);
+      return;
+    }
+    let cancelled = false;
+    setHistoryLoading(true);
+    getCashupHistory(branchId)
+      .then((rows) => {
+        if (!cancelled) setHistory(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setHistory([]);
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [branchId]);
+
   // ─── Load cashup data ──────────────────────────────────────────────
-  const handleLoad = useCallback(() => {
-    if (!branchId || !date) return;
+  const handleLoad = useCallback(
+    (dateOverride?: string) => {
+      const loadDate = dateOverride ?? date;
+      if (!branchId || !loadDate) return;
 
-    startTransition(async () => {
-      const [cashupData, auraData, driverData, channelData, staffData] =
-        await Promise.all([
-          loadCashup(branchId, date),
-          checkAuraImport(branchId, date),
-          getDriversFromRoster(branchId, date),
-          getPaymentChannels(branchId),
-          getRosteredStaff(branchId, date),
-        ]);
-
-      setCashup(cashupData);
-      setAuraImport(auraData);
-      setDrivers(driverData);
-      setChannels(channelData);
-      setRosteredStaff(staffData);
-
-      if (cashupData?.status === "submitted") {
-        setStatus("submitted");
-      } else if (auraData) {
-        setStatus("aura");
-      } else {
-        setStatus("manual");
+      if (dateOverride) {
+        setDate(dateOverride);
       }
 
-      setLoaded(true);
-      setFormKey((k) => k + 1);
-    });
-  }, [branchId, date]);
+      startTransition(async () => {
+        const [cashupData, auraData, driverData, channelData, staffData] =
+          await Promise.all([
+            loadCashup(branchId, loadDate),
+            checkAuraImport(branchId, loadDate),
+            getDriversFromRoster(branchId, loadDate),
+            getPaymentChannels(branchId),
+            getRosteredStaff(branchId, loadDate),
+          ]);
+
+        setCashup(cashupData);
+        setAuraImport(auraData);
+        setDrivers(driverData);
+        setChannels(channelData);
+        setRosteredStaff(staffData);
+
+        if (cashupData?.status === "submitted") {
+          setStatus("submitted");
+        } else if (auraData) {
+          setStatus("aura");
+        } else {
+          setStatus("manual");
+        }
+
+        setLoaded(true);
+        setFormKey((k) => k + 1);
+      });
+    },
+    [branchId, date]
+  );
 
   // ─── Unlock handler ────────────────────────────────────────────────
   const handleUnlock = useCallback(() => {
@@ -146,13 +185,123 @@ export default function CashupPage() {
 
         <Button
           variant="primary"
-          onClick={handleLoad}
+          onClick={() => handleLoad()}
           disabled={!branchId || !date || isPending}
         >
           {isPending && <Loader2 size={16} className="animate-spin" />}
           Load
         </Button>
       </div>
+
+      {/* ── Recent Cashups history table ────────────────────────────── */}
+      {!loaded && branchId && !isPending && (
+        <div className="rounded-xl border border-base-200 bg-surface mb-6">
+          <div className="px-4 py-3 border-b border-base-200">
+            <h3 className="text-sm font-semibold text-base-900">
+              Recent Cashups
+            </h3>
+          </div>
+
+          {historyLoading ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 size={20} className="animate-spin text-accent" />
+            </div>
+          ) : history.length === 0 ? (
+            <div className="text-center py-10 text-base-400">
+              <p className="text-sm">
+                No cashups recorded for this branch yet.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-surface">
+                  <tr className="border-b border-base-200 text-left text-xs font-medium text-base-500 uppercase tracking-wider">
+                    <th className="px-4 py-2">Date</th>
+                    <th className="px-4 py-2 text-right hidden sm:table-cell">
+                      Gross Turnover
+                    </th>
+                    <th className="px-4 py-2 text-right hidden md:table-cell">
+                      Cash Banked
+                    </th>
+                    <th className="px-4 py-2 text-right hidden md:table-cell">
+                      Variance
+                    </th>
+                    <th className="px-4 py-2">Status</th>
+                    <th className="px-4 py-2 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.map((row, idx) => {
+                    const turnover = row.gross_turnover ?? 0;
+                    const discounts = row.discounts ?? 0;
+                    const creditCards = row.credit_cards ?? 0;
+                    const cashBanked = row.cash_banked ?? 0;
+                    const expectedCash =
+                      turnover - discounts - creditCards;
+                    const variance = cashBanked - expectedCash;
+
+                    return (
+                      <tr
+                        key={row.id}
+                        className={`border-b border-base-100 ${
+                          idx % 2 === 1 ? "bg-base-50" : ""
+                        }`}
+                      >
+                        <td className="px-4 py-2.5 text-base-900 whitespace-nowrap">
+                          {formatDate(row.date)}
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-mono text-base-700 hidden sm:table-cell">
+                          {row.gross_turnover != null
+                            ? formatCurrency(row.gross_turnover)
+                            : "-"}
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-mono text-base-700 hidden md:table-cell">
+                          {row.cash_banked != null
+                            ? formatCurrency(row.cash_banked)
+                            : "-"}
+                        </td>
+                        <td
+                          className={`px-4 py-2.5 text-right font-mono hidden md:table-cell ${
+                            variance === 0
+                              ? "text-green-600"
+                              : "text-red-600"
+                          }`}
+                        >
+                          {formatCurrency(variance)}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <span
+                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                              row.status === "submitted"
+                                ? "bg-green-100 text-green-700"
+                                : "bg-amber-100 text-amber-700"
+                            }`}
+                          >
+                            {row.status === "submitted"
+                              ? "Submitted"
+                              : "Draft"}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5 text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleLoad(row.date)}
+                          >
+                            <Eye size={14} />
+                            View
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Status banner ────────────────────────────────────────────── */}
       {loaded && status === "aura" && (
@@ -209,8 +358,8 @@ export default function CashupPage() {
         />
       )}
 
-      {/* ── Empty state ──────────────────────────────────────────────── */}
-      {!loaded && !isPending && (
+      {/* ── Empty state (no branch selected) ────────────────────────── */}
+      {!loaded && !isPending && !branchId && (
         <div className="text-center py-16 text-base-400">
           <p className="text-sm">
             Select a branch and date, then click Load to begin.

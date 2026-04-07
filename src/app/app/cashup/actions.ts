@@ -482,6 +482,41 @@ export async function getRosteredStaff(
   return result;
 }
 
+// ─── Get cashup history for branch ───────────────────────────────────────────
+
+export interface CashupHistoryRow {
+  id: string;
+  date: string;
+  gross_turnover: number | null;
+  cash_banked: number | null;
+  discounts: number | null;
+  credit_cards: number | null;
+  status: string | null;
+  submitted_at: string | null;
+}
+
+export async function getCashupHistory(
+  branchId: string,
+  limit: number = 14
+): Promise<CashupHistoryRow[]> {
+  const supabase = await createClient();
+
+  const { data: tenantId } = await supabase.rpc("get_user_tenant_id");
+  if (!tenantId) return [];
+
+  const { data } = await supabase
+    .from("daily_cashups")
+    .select(
+      "id, date, gross_turnover, cash_banked, discounts, credit_cards, status, submitted_at"
+    )
+    .eq("branch_id", branchId)
+    .eq("tenant_id", tenantId)
+    .order("date", { ascending: false })
+    .limit(limit);
+
+  return (data ?? []) as CashupHistoryRow[];
+}
+
 // ─── Unlock cashup ────────────────────────────────────────────────────────────
 
 export async function unlockCashup(cashupId: string) {
