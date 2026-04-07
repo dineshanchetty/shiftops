@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Sora, Inter, JetBrains_Mono } from "next/font/google";
+import { PageLoader } from "@/components/layout/page-loader";
 import "./globals.css";
 
 const sora = Sora({
@@ -38,6 +39,7 @@ export default function RootLayout({
       <body
         className={`${sora.variable} ${inter.variable} ${jetbrainsMono.variable} antialiased`}
       >
+        <PageLoader />
         {children}
       </body>
     </html>
