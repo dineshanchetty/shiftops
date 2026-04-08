@@ -490,7 +490,9 @@ export interface CashupHistoryRow {
   gross_turnover: number | null;
   cash_banked: number | null;
   discounts: number | null;
+  delivery_charges: number | null;
   credit_cards: number | null;
+  debtors: number | null;
   status: string | null;
   submitted_at: string | null;
 }
@@ -507,7 +509,7 @@ export async function getCashupHistory(
   const { data } = await supabase
     .from("daily_cashups")
     .select(
-      "id, date, gross_turnover, cash_banked, discounts, credit_cards, status, submitted_at"
+      "id, date, gross_turnover, cash_banked, discounts, delivery_charges, credit_cards, debtors, status, submitted_at"
     )
     .eq("branch_id", branchId)
     .eq("tenant_id", tenantId)
