@@ -44,9 +44,12 @@ export function SummaryPanel({ values }: SummaryPanelProps) {
     0
   );
 
+  // Daily Banking formula (matches legacy Blue Lounge system):
+  // Gross Turnover - Discounts + Delivery Charges - Credit Cards - Debtors - Online Payments - Expenses
+  // NOTE: Delivery Charges are ADDED because they are income received from customers
   const dailyBanking =
     n(values.gross_turnover) -
-    n(values.discounts) -
+    n(values.discounts) +
     n(values.delivery_charges) -
     n(values.credit_cards) -
     n(values.debtors) -
@@ -66,8 +69,8 @@ export function SummaryPanel({ values }: SummaryPanelProps) {
         indent
       />
       <SummaryRow
-        label="Less: Delivery Charges"
-        value={-n(values.delivery_charges)}
+        label="Delivery Charges"
+        value={n(values.delivery_charges)}
         indent
       />
       <SummaryRow
