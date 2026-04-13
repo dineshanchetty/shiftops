@@ -11,6 +11,14 @@ import {
   AlertTriangle,
   PieChart,
   FileSpreadsheet,
+  ShoppingCart,
+  Target,
+  Users,
+  ClipboardList,
+  Clock,
+  Banknote,
+  Wallet,
+  Scale,
 } from "lucide-react";
 
 const reports = [
@@ -83,6 +91,62 @@ const reports = [
       "Export staff hours and wages for Sage Pastel.",
     href: "/app/reports/payroll-export",
     icon: FileSpreadsheet,
+  },
+  {
+    title: "Purchase / Expense",
+    description:
+      "Purchases and expenses grouped by category with subtotals.",
+    href: "/app/reports/purchase-expense",
+    icon: ShoppingCart,
+  },
+  {
+    title: "Turnover vs Budget",
+    description:
+      "Daily turnover against a configurable budget target with variance tracking.",
+    href: "/app/reports/turnover-budget",
+    icon: Target,
+  },
+  {
+    title: "Driver Summary",
+    description:
+      "Aggregated driver performance: deliveries, wages, fuel, and averages.",
+    href: "/app/reports/driver-summary",
+    icon: Users,
+  },
+  {
+    title: "Budget Roster",
+    description:
+      "Scheduled hours vs target hours per staff member.",
+    href: "/app/reports/budget-roster",
+    icon: ClipboardList,
+  },
+  {
+    title: "Wages Hours vs Budget",
+    description:
+      "Scheduled, actual, and budget hours per staff with variance.",
+    href: "/app/reports/wages-hours-budget",
+    icon: Clock,
+  },
+  {
+    title: "Cash Banked",
+    description:
+      "Daily banking vs cash banked with variance highlighting.",
+    href: "/app/reports/cash-banked",
+    icon: Banknote,
+  },
+  {
+    title: "Monthly CC Summary",
+    description:
+      "Credit card sales vs batch totals with mismatch detection.",
+    href: "/app/reports/monthly-cc",
+    icon: Wallet,
+  },
+  {
+    title: "Global Wages Comparison",
+    description:
+      "Multi-branch wage cost comparison against turnover targets.",
+    href: "/app/reports/global-wages",
+    icon: Scale,
   },
 ] as const;
 
