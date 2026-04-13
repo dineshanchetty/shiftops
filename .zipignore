@@ -1,0 +1,11 @@
+node_modules/
+.git/
+test-results/
+playwright-report/
+.next/cache/
+tests/
+docs/
+screenshots/
+.claude/
+supabase/
+*.output

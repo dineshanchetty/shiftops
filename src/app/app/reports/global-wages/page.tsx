@@ -2,135 +2,376 @@
 
 import { useState, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { ReportWrapper, type ReportFilters } from "@/components/reports/report-wrapper";
-import { StatCard } from "@/components/ui/stat-card";
+import {
+  ReportWrapper,
+  type ReportFilters,
+} from "@/components/reports/report-wrapper";
 import { formatCurrency, cn } from "@/lib/utils";
 import { generateCSV, triggerDownload } from "@/lib/report-utils";
-import type { DailyCashup } from "@/lib/types";
-import { Scale, DollarSign, TrendingUp, AlertTriangle } from "lucide-react";
+
+import { Scale } from "lucide-react";
+
+interface WageBreakdown {
+  normal: number;
+  sunday: number;
+  ph: number;
+  leave: number;
+  sick: number;
+  total: number;
+}
 
 interface GlobalWagesRow {
   branchId: string;
   branchName: string;
-  totalTurnover: number;
-  totalWages: number;
-  wagesPct: number;
-  targetPct: number;
-  overUnder: number;
+  left: WageBreakdown;
+  right: WageBreakdown;
+  difference: number;
+}
+
+function emptyBreakdown(): WageBreakdown {
+  return { normal: 0, sunday: 0, ph: 0, leave: 0, sick: 0, total: 0 };
+}
+
+function toISODate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+function getDefaultPeriods() {
+  const now = new Date();
+  // Left period = last month
+  const leftFrom = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const leftTo = new Date(now.getFullYear(), now.getMonth(), 0);
+  // Right period = this month
+  const rightFrom = new Date(now.getFullYear(), now.getMonth(), 1);
+  const rightTo = now;
+  return {
+    leftFrom: toISODate(leftFrom),
+    leftTo: toISODate(leftTo),
+    rightFrom: toISODate(rightFrom),
+    rightTo: toISODate(rightTo),
+  };
 }
 
 export default function GlobalWagesPage() {
   const supabase = createClient();
   const [data, setData] = useState<GlobalWagesRow[]>([]);
   const [loading, setLoading] = useState(false);
-  const [targetPct, setTargetPct] = useState(25);
+
+  const defaults = getDefaultPeriods();
+  const [leftFrom, setLeftFrom] = useState(defaults.leftFrom);
+  const [leftTo, setLeftTo] = useState(defaults.leftTo);
+  const [rightFrom, setRightFrom] = useState(defaults.rightFrom);
+  const [rightTo, setRightTo] = useState(defaults.rightTo);
+
+  const fetchWagesForPeriod = useCallback(
+    async (
+      branchIds: string[],
+      dateFrom: string,
+      dateTo: string
+    ): Promise<Map<string, WageBreakdown>> => {
+      // Get cashups in range
+      const { data: cashups } = await supabase
+        .from("daily_cashups")
+        .select("id, branch_id, date")
+        .in("branch_id", branchIds)
+        .gte("date", dateFrom)
+        .lte("date", dateTo);
+
+      if (!cashups || cashups.length === 0) return new Map();
+
+      const cashupIds = cashups.map((c) => c.id);
+      const cashupMeta = new Map(
+        cashups.map((c) => [c.id, { branchId: c.branch_id, date: c.date }])
+      );
+
+      // Get driver entries for wages
+      const { data: driverEntries } = await supabase
+        .from("cashup_driver_entries")
+        .select("cashup_id, wages")
+        .in("cashup_id", cashupIds);
+
+      const branchBreakdowns = new Map<string, WageBreakdown>();
+
+      if (driverEntries) {
+        for (const d of driverEntries) {
+          const meta = cashupMeta.get(d.cashup_id);
+          if (!meta) continue;
+
+          const wages = d.wages ?? 0;
+          const dayOfWeek = new Date(meta.date).getDay(); // 0=Sun, 6=Sat
+
+          if (!branchBreakdowns.has(meta.branchId)) {
+            branchBreakdowns.set(meta.branchId, emptyBreakdown());
+          }
+          const bd = branchBreakdowns.get(meta.branchId)!;
+
+          if (dayOfWeek === 0) {
+            // Sunday
+            bd.sunday += wages;
+          } else {
+            // Mon-Sat = Normal
+            bd.normal += wages;
+          }
+          bd.total += wages;
+          // PH, Leave, Sick = R0.00 for now
+        }
+      }
+
+      return branchBreakdowns;
+    },
+    [supabase]
+  );
 
   const handleRun = useCallback(
     async (f: ReportFilters) => {
       if (f.branchIds.length === 0) return;
       setLoading(true);
 
-      const [{ data: cashups }, { data: branches }] = await Promise.all([
-        supabase
-          .from("daily_cashups")
-          .select("*")
-          .in("branch_id", f.branchIds)
-          .gte("date", f.dateFrom)
-          .lte("date", f.dateTo),
+      const [leftData, rightData, { data: branches }] = await Promise.all([
+        fetchWagesForPeriod(f.branchIds, leftFrom, leftTo),
+        fetchWagesForPeriod(f.branchIds, rightFrom, rightTo),
         supabase.from("branches").select("id, name"),
       ]);
 
-      if (!cashups || cashups.length === 0) {
-        setData([]);
-        setLoading(false);
-        return;
-      }
+      const branchMap = new Map(
+        (branches ?? []).map((b) => [b.id, b.name as string])
+      );
 
-      const branchMap = new Map((branches ?? []).map((b) => [b.id, b.name]));
+      // Build rows for all branches that have data in either period
+      const allBranchIds = new Set([
+        ...f.branchIds,
+        ...Array.from(leftData.keys()),
+        ...Array.from(rightData.keys()),
+      ]);
 
-      // Get cashup IDs for driver entries
-      const cashupIds = (cashups as DailyCashup[]).map((c) => c.id);
-      const { data: driverEntries } = await supabase
-        .from("cashup_driver_entries")
-        .select("cashup_id, wages")
-        .in("cashup_id", cashupIds);
-
-      // Map cashup_id -> branch_id for driver entries
-      const cashupBranchMap = new Map((cashups as DailyCashup[]).map((c) => [c.id, c.branch_id]));
-
-      // Aggregate turnover per branch
-      const branchTurnover = new Map<string, number>();
-      for (const c of cashups as DailyCashup[]) {
-        branchTurnover.set(c.branch_id, (branchTurnover.get(c.branch_id) ?? 0) + (c.gross_turnover ?? 0));
-      }
-
-      // Aggregate wages per branch from driver entries
-      const branchWages = new Map<string, number>();
-      if (driverEntries) {
-        for (const d of driverEntries) {
-          const branchId = cashupBranchMap.get(d.cashup_id);
-          if (branchId) {
-            branchWages.set(branchId, (branchWages.get(branchId) ?? 0) + (d.wages ?? 0));
-          }
-        }
-      }
-
-      const allBranchIds = new Set([...Array.from(branchTurnover.keys()), ...Array.from(branchWages.keys())]);
-      const rows: GlobalWagesRow[] = Array.from(allBranchIds).map((branchId) => {
-        const turnover = branchTurnover.get(branchId) ?? 0;
-        const wages = branchWages.get(branchId) ?? 0;
-        const pct = turnover > 0 ? (wages / turnover) * 100 : 0;
-        return {
-          branchId,
-          branchName: branchMap.get(branchId) ?? "Unknown",
-          totalTurnover: turnover,
-          totalWages: wages,
-          wagesPct: pct,
-          targetPct,
-          overUnder: pct - targetPct,
-        };
-      });
+      const rows: GlobalWagesRow[] = Array.from(allBranchIds)
+        .filter((id) => f.branchIds.includes(id))
+        .map((branchId) => {
+          const left = leftData.get(branchId) ?? emptyBreakdown();
+          const right = rightData.get(branchId) ?? emptyBreakdown();
+          return {
+            branchId,
+            branchName: branchMap.get(branchId) ?? "Unknown",
+            left,
+            right,
+            difference: left.total - right.total,
+          };
+        });
 
       rows.sort((a, b) => a.branchName.localeCompare(b.branchName));
       setData(rows);
       setLoading(false);
     },
-    [supabase, targetPct]
+    [supabase, fetchWagesForPeriod, leftFrom, leftTo, rightFrom, rightTo]
   );
 
   const handleExportCSV = useCallback(() => {
-    const headers = ["Branch", "Total Turnover", "Total Wages", "Wages %", "Target %", "Over/Under"];
-    const rows = data.map((r) => [r.branchName, r.totalTurnover, r.totalWages, r.wagesPct.toFixed(1), r.targetPct, r.overUnder.toFixed(1)]);
-    triggerDownload(generateCSV(headers, rows), "global-wages-comparison.csv", "text/csv");
+    const headers = [
+      "Branch",
+      "L-Normal",
+      "L-Sunday",
+      "L-PH",
+      "L-Leave",
+      "L-Sick",
+      "L-Total",
+      "R-Normal",
+      "R-Sunday",
+      "R-PH",
+      "R-Leave",
+      "R-Sick",
+      "R-Total",
+      "Difference",
+    ];
+    const csvRows = data.map((r) => [
+      r.branchName,
+      r.left.normal,
+      r.left.sunday,
+      r.left.ph,
+      r.left.leave,
+      r.left.sick,
+      r.left.total,
+      r.right.normal,
+      r.right.sunday,
+      r.right.ph,
+      r.right.leave,
+      r.right.sick,
+      r.right.total,
+      r.difference,
+    ]);
+
+    // Total row
+    const totLeft = data.reduce(
+      (acc, r) => ({
+        normal: acc.normal + r.left.normal,
+        sunday: acc.sunday + r.left.sunday,
+        ph: acc.ph + r.left.ph,
+        leave: acc.leave + r.left.leave,
+        sick: acc.sick + r.left.sick,
+        total: acc.total + r.left.total,
+      }),
+      emptyBreakdown()
+    );
+    const totRight = data.reduce(
+      (acc, r) => ({
+        normal: acc.normal + r.right.normal,
+        sunday: acc.sunday + r.right.sunday,
+        ph: acc.ph + r.right.ph,
+        leave: acc.leave + r.right.leave,
+        sick: acc.sick + r.right.sick,
+        total: acc.total + r.right.total,
+      }),
+      emptyBreakdown()
+    );
+    csvRows.push([
+      "Total",
+      totLeft.normal,
+      totLeft.sunday,
+      totLeft.ph,
+      totLeft.leave,
+      totLeft.sick,
+      totLeft.total,
+      totRight.normal,
+      totRight.sunday,
+      totRight.ph,
+      totRight.leave,
+      totRight.sick,
+      totRight.total,
+      totLeft.total - totRight.total,
+    ]);
+
+    triggerDownload(
+      generateCSV(headers, csvRows),
+      "global-wages-comparison.csv",
+      "text/csv"
+    );
   }, [data]);
 
-  const totalWagesAll = data.reduce((s, r) => s + r.totalWages, 0);
-  const totalTurnoverAll = data.reduce((s, r) => s + r.totalTurnover, 0);
-  const avgWagesPct = totalTurnoverAll > 0 ? (totalWagesAll / totalTurnoverAll) * 100 : 0;
-  const highestCost = data.length > 0 ? data.reduce((max, r) => r.wagesPct > max.wagesPct ? r : max, data[0]) : null;
+  // Totals
+  const totLeft = data.reduce(
+    (acc, r) => ({
+      normal: acc.normal + r.left.normal,
+      sunday: acc.sunday + r.left.sunday,
+      ph: acc.ph + r.left.ph,
+      leave: acc.leave + r.left.leave,
+      sick: acc.sick + r.left.sick,
+      total: acc.total + r.left.total,
+    }),
+    emptyBreakdown()
+  );
+  const totRight = data.reduce(
+    (acc, r) => ({
+      normal: acc.normal + r.right.normal,
+      sunday: acc.sunday + r.right.sunday,
+      ph: acc.ph + r.right.ph,
+      leave: acc.leave + r.right.leave,
+      sick: acc.sick + r.right.sick,
+      total: acc.total + r.right.total,
+    }),
+    emptyBreakdown()
+  );
+  const totalDifference = totLeft.total - totRight.total;
+
+  const wageHeaders = ["Normal", "Sunday", "PH", "Leave", "Sick", "Total"];
+
+  function renderBreakdownCells(bd: WageBreakdown, borderLeft = false) {
+    const base = "px-3 py-2 text-right font-mono text-base-900";
+    return (
+      <>
+        <td className={cn(base, borderLeft && "border-l border-base-200")}>
+          {formatCurrency(bd.normal)}
+        </td>
+        <td className={base}>{formatCurrency(bd.sunday)}</td>
+        <td className={base}>{formatCurrency(bd.ph)}</td>
+        <td className={base}>{formatCurrency(bd.leave)}</td>
+        <td className={base}>{formatCurrency(bd.sick)}</td>
+        <td className={cn(base, "font-semibold")}>
+          {formatCurrency(bd.total)}
+        </td>
+      </>
+    );
+  }
 
   return (
-    <ReportWrapper title="Global Wages Comparison" onRun={handleRun} onExportCSV={handleExportCSV}>
-      {/* Target input */}
-      <div className="flex items-end gap-3 mb-6 print:hidden">
-        <div>
-          <label className="text-sm font-medium text-base-700 block mb-1.5">Target Wages % of Turnover</label>
-          <input
-            type="number"
-            value={targetPct}
-            onChange={(e) => setTargetPct(Number(e.target.value) || 0)}
-            className="h-10 px-3 rounded-lg border border-base-200 bg-surface text-sm text-base-900 font-mono w-32"
-            step={0.5}
-          />
+    <ReportWrapper
+      title="Global Wages Comparison Report"
+      onRun={handleRun}
+      onExportCSV={handleExportCSV}
+    >
+      {/* Dual-period controls */}
+      <div className="flex flex-wrap items-end gap-4 mb-6 print:hidden">
+        <div className="flex items-end gap-2 p-3 border border-base-200 rounded-lg bg-surface">
+          <div>
+            <label className="text-xs font-medium text-base-500 block mb-1">
+              Left Period From
+            </label>
+            <input
+              type="date"
+              value={leftFrom}
+              onChange={(e) => setLeftFrom(e.target.value)}
+              className="h-9 px-2 rounded border border-base-200 bg-surface text-sm text-base-900"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-base-500 block mb-1">
+              To
+            </label>
+            <input
+              type="date"
+              value={leftTo}
+              onChange={(e) => setLeftTo(e.target.value)}
+              className="h-9 px-2 rounded border border-base-200 bg-surface text-sm text-base-900"
+            />
+          </div>
         </div>
-      </div>
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Total Wages (All)" value={formatCurrency(totalWagesAll)} icon={<DollarSign className="h-5 w-5" />} />
-        <StatCard label="Average Wages %" value={`${avgWagesPct.toFixed(1)}%`} icon={<TrendingUp className="h-5 w-5" />} />
-        <StatCard label="Highest Cost Branch" value={highestCost?.branchName ?? "-"} icon={<AlertTriangle className="h-5 w-5" />} />
-        <StatCard label="Branches" value={data.length} icon={<Scale className="h-5 w-5" />} />
+        <div className="flex items-end gap-2 p-3 border border-base-200 rounded-lg bg-surface">
+          <div>
+            <label className="text-xs font-medium text-base-500 block mb-1">
+              Right Period From
+            </label>
+            <input
+              type="date"
+              value={rightFrom}
+              onChange={(e) => setRightFrom(e.target.value)}
+              className="h-9 px-2 rounded border border-base-200 bg-surface text-sm text-base-900"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-base-500 block mb-1">
+              To
+            </label>
+            <input
+              type="date"
+              value={rightTo}
+              onChange={(e) => setRightTo(e.target.value)}
+              className="h-9 px-2 rounded border border-base-200 bg-surface text-sm text-base-900"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="text-xs font-medium text-base-500 block mb-1">
+            Columns
+          </label>
+          <select
+            className="h-9 px-2 rounded border border-base-200 bg-surface text-sm text-base-900"
+            defaultValue="actual"
+          >
+            <option value="actual">Actual</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="text-xs font-medium text-base-500 block mb-1">
+            Values
+          </label>
+          <select
+            className="h-9 px-2 rounded border border-base-200 bg-surface text-sm text-base-900"
+            defaultValue="amounts"
+          >
+            <option value="amounts">Amounts</option>
+          </select>
+        </div>
       </div>
 
       {/* Loading */}
@@ -146,7 +387,7 @@ export default function GlobalWagesPage() {
       {!loading && data.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-base-400">
           <Scale className="h-12 w-12 mb-3" />
-          <p className="text-sm">No data for selected period</p>
+          <p className="text-sm">No data for selected periods</p>
         </div>
       )}
 
@@ -155,9 +396,48 @@ export default function GlobalWagesPage() {
         <div className="overflow-x-auto rounded-lg border border-base-200">
           <table className="w-full text-sm">
             <thead>
+              {/* Group header row */}
               <tr className="bg-surface-2">
-                {["Branch", "Total Turnover", "Total Wages", "Wages %", "Target %", "Over/Under"].map((h) => (
-                  <th key={h} className={cn("px-4 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 sticky top-0 bg-surface-2", h === "Branch" ? "text-left" : "text-right")}>
+                <th
+                  rowSpan={2}
+                  className="px-4 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 text-left border-r border-base-200 sticky top-0 bg-surface-2"
+                >
+                  Branch
+                </th>
+                <th
+                  colSpan={6}
+                  className="px-3 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 text-center border-r border-base-200 bg-surface-2"
+                >
+                  Actual Amounts From {leftFrom} to {leftTo}
+                </th>
+                <th
+                  colSpan={6}
+                  className="px-3 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 text-center border-r border-base-200 bg-surface-2"
+                >
+                  Actual Amounts From {rightFrom} to {rightTo}
+                </th>
+                <th
+                  rowSpan={2}
+                  className="px-3 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 text-right sticky top-0 bg-surface-2"
+                >
+                  Difference
+                </th>
+              </tr>
+              {/* Sub-header row */}
+              <tr className="bg-surface-2 border-t border-base-200">
+                {wageHeaders.map((h) => (
+                  <th
+                    key={`l-${h}`}
+                    className="px-3 py-1 text-xs uppercase tracking-wide font-semibold text-base-400 text-right bg-surface-2"
+                  >
+                    {h}
+                  </th>
+                ))}
+                {wageHeaders.map((h) => (
+                  <th
+                    key={`r-${h}`}
+                    className="px-3 py-1 text-xs uppercase tracking-wide font-semibold text-base-400 text-right bg-surface-2 border-l border-base-200"
+                  >
                     {h}
                   </th>
                 ))}
@@ -165,31 +445,40 @@ export default function GlobalWagesPage() {
             </thead>
             <tbody>
               {data.map((row) => (
-                <tr key={row.branchId} className="border-b border-base-200 hover:bg-surface-2 transition-colors">
-                  <td className="px-4 py-2 text-base-900 font-medium">{row.branchName}</td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(row.totalTurnover)}</td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(row.totalWages)}</td>
-                  <td className={cn("px-4 py-2 text-right font-mono font-semibold", row.wagesPct > targetPct ? "text-red-600" : "text-green-600")}>
-                    {row.wagesPct.toFixed(1)}%
+                <tr
+                  key={row.branchId}
+                  className="border-b border-base-200 hover:bg-surface-2 transition-colors"
+                >
+                  <td className="px-4 py-2 text-base-900 font-medium border-r border-base-200">
+                    {row.branchName}
                   </td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">{row.targetPct}%</td>
-                  <td className={cn("px-4 py-2 text-right font-mono font-semibold", row.overUnder > 0 ? "text-red-600" : "text-green-600")}>
-                    {row.overUnder > 0 ? "+" : ""}{row.overUnder.toFixed(1)}%
+                  {renderBreakdownCells(row.left)}
+                  {renderBreakdownCells(row.right, true)}
+                  <td
+                    className={cn(
+                      "px-3 py-2 text-right font-mono font-semibold border-l border-base-200",
+                      row.difference < 0 ? "text-red-600" : "text-base-900"
+                    )}
+                  >
+                    {formatCurrency(row.difference)}
                   </td>
                 </tr>
               ))}
             </tbody>
             <tfoot>
               <tr className="bg-surface-2 font-semibold">
-                <td className="px-4 py-2 text-base-900">All Branches</td>
-                <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(totalTurnoverAll)}</td>
-                <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(totalWagesAll)}</td>
-                <td className={cn("px-4 py-2 text-right font-mono font-semibold", avgWagesPct > targetPct ? "text-red-600" : "text-green-600")}>
-                  {avgWagesPct.toFixed(1)}%
+                <td className="px-4 py-2 text-base-900 border-r border-base-200">
+                  Total
                 </td>
-                <td className="px-4 py-2 text-right font-mono text-base-900">{targetPct}%</td>
-                <td className={cn("px-4 py-2 text-right font-mono font-semibold", avgWagesPct - targetPct > 0 ? "text-red-600" : "text-green-600")}>
-                  {avgWagesPct - targetPct > 0 ? "+" : ""}{(avgWagesPct - targetPct).toFixed(1)}%
+                {renderBreakdownCells(totLeft)}
+                {renderBreakdownCells(totRight, true)}
+                <td
+                  className={cn(
+                    "px-3 py-2 text-right font-mono font-semibold border-l border-base-200",
+                    totalDifference < 0 ? "text-red-600" : "text-base-900"
+                  )}
+                >
+                  {formatCurrency(totalDifference)}
                 </td>
               </tr>
             </tfoot>

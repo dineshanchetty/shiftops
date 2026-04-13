@@ -2,24 +2,34 @@
 
 import { useState, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { ReportWrapper, type ReportFilters } from "@/components/reports/report-wrapper";
-import { StatCard } from "@/components/ui/stat-card";
+import {
+  ReportWrapper,
+  type ReportFilters,
+} from "@/components/reports/report-wrapper";
 import { formatCurrency, cn } from "@/lib/utils";
 import { generateCSV, triggerDownload } from "@/lib/report-utils";
-import { Users, Truck, DollarSign, CalendarDays } from "lucide-react";
+import { Users } from "lucide-react";
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+
+
+
+// ─── Types ─────────────────────────────────────────────────────────────────
 
 interface DriverRow {
   staffId: string;
   name: string;
-  daysWorked: number;
-  totalDeliveries: number;
-  totalTurnover: number;
+  totalTO: number;
   totalWages: number;
   totalFuel: number;
   totalGratuities: number;
-  avgDeliveriesPerDay: number;
-  avgTurnoverPerDay: number;
+  numDeliveries: number;
+  wageRatePerDelivery: number;
+  ratePerDelivery: number;
+  wagesPctTO: number;
 }
+
+// ─── Page ──────────────────────────────────────────────────────────────────
 
 export default function DriverSummaryPage() {
   const supabase = createClient();
@@ -60,51 +70,63 @@ export default function DriverSummaryPage() {
         return;
       }
 
-      const staffMap = new Map((staffList ?? []).map((s) => [s.id, `${s.first_name} ${s.last_name}`]));
+      const staffMap = new Map(
+        (staffList ?? []).map((s) => [
+          s.id,
+          `${s.first_name} ${s.last_name}`,
+        ])
+      );
 
       // Aggregate per driver
-      const driverMap = new Map<string, {
-        daysSet: Set<string>;
-        deliveries: number;
-        turnover: number;
-        wages: number;
-        fuel: number;
-        gratuities: number;
-      }>();
+      const driverMap = new Map<
+        string,
+        {
+          turnover: number;
+          wages: number;
+          fuel: number;
+          gratuities: number;
+          deliveries: number;
+        }
+      >();
 
       for (const e of entries) {
         const existing = driverMap.get(e.staff_id) ?? {
-          daysSet: new Set<string>(),
-          deliveries: 0,
           turnover: 0,
           wages: 0,
           fuel: 0,
           gratuities: 0,
+          deliveries: 0,
         };
-        existing.daysSet.add(e.cashup_id);
-        existing.deliveries += e.delivery_count ?? 0;
         existing.turnover += e.turnover ?? 0;
         existing.wages += e.wages ?? 0;
         existing.fuel += e.fuel_cost ?? 0;
         existing.gratuities += e.gratuities ?? 0;
+        existing.deliveries += e.delivery_count ?? 0;
         driverMap.set(e.staff_id, existing);
       }
 
-      const rows: DriverRow[] = Array.from(driverMap.entries()).map(([staffId, d]) => {
-        const days = d.daysSet.size;
-        return {
-          staffId,
-          name: staffMap.get(staffId) ?? "Unknown",
-          daysWorked: days,
-          totalDeliveries: d.deliveries,
-          totalTurnover: d.turnover,
-          totalWages: d.wages,
-          totalFuel: d.fuel,
-          totalGratuities: d.gratuities,
-          avgDeliveriesPerDay: days > 0 ? d.deliveries / days : 0,
-          avgTurnoverPerDay: days > 0 ? d.turnover / days : 0,
-        };
-      });
+      const rows: DriverRow[] = Array.from(driverMap.entries()).map(
+        ([staffId, d]) => {
+          const wageRate =
+            d.deliveries > 0 ? d.wages / d.deliveries : 0;
+          const toRate =
+            d.deliveries > 0 ? d.turnover / d.deliveries : 0;
+          const wagesPct =
+            d.turnover > 0 ? (d.wages / d.turnover) * 100 : 0;
+          return {
+            staffId,
+            name: staffMap.get(staffId) ?? "Unknown",
+            totalTO: d.turnover,
+            totalWages: d.wages,
+            totalFuel: d.fuel,
+            totalGratuities: d.gratuities,
+            numDeliveries: d.deliveries,
+            wageRatePerDelivery: wageRate,
+            ratePerDelivery: toRate,
+            wagesPctTO: wagesPct,
+          };
+        }
+      );
 
       rows.sort((a, b) => a.name.localeCompare(b.name));
       setData(rows);
@@ -114,26 +136,65 @@ export default function DriverSummaryPage() {
   );
 
   const handleExportCSV = useCallback(() => {
-    const headers = ["Driver Name", "Days Worked", "Total Deliveries", "Total Turnover", "Total Wages", "Total Fuel", "Total Gratuities", "Avg Deliveries/Day", "Avg Turnover/Day"];
-    const rows = data.map((r) => [r.name, r.daysWorked, r.totalDeliveries, r.totalTurnover, r.totalWages, r.totalFuel, r.totalGratuities, r.avgDeliveriesPerDay.toFixed(1), r.avgTurnoverPerDay.toFixed(0)]);
-    triggerDownload(generateCSV(headers, rows), "driver-summary.csv", "text/csv");
+    const headers = [
+      "Driver Name",
+      "Total T/O",
+      "Total Salary/Wages",
+      "Total Fuel Cost",
+      "Total Gratuities",
+      "No. Deliveries",
+      "Total Wage/Salary Rate Per Delivery",
+      "Total Rate Per Delivery",
+      "% Wages vs T/O",
+    ];
+    const csvRows = data.map((r) => [
+      r.name,
+      r.totalTO,
+      r.totalWages,
+      r.totalFuel,
+      r.totalGratuities,
+      r.numDeliveries,
+      r.wageRatePerDelivery.toFixed(2),
+      r.ratePerDelivery.toFixed(2),
+      r.wagesPctTO.toFixed(2) + "%",
+    ]);
+    triggerDownload(
+      generateCSV(headers, csvRows),
+      "driver-summary.csv",
+      "text/csv"
+    );
   }, [data]);
 
-  const totalDrivers = data.length;
-  const totalDeliveries = data.reduce((s, r) => s + r.totalDeliveries, 0);
+  // Totals
+  const totalTO = data.reduce((s, r) => s + r.totalTO, 0);
   const totalWages = data.reduce((s, r) => s + r.totalWages, 0);
-  const avgCostPerDelivery = totalDeliveries > 0 ? totalWages / totalDeliveries : 0;
+  const totalFuel = data.reduce((s, r) => s + r.totalFuel, 0);
+  const totalGratuities = data.reduce((s, r) => s + r.totalGratuities, 0);
+  const totalDeliveries = data.reduce((s, r) => s + r.numDeliveries, 0);
+  const totalWageRate =
+    totalDeliveries > 0 ? totalWages / totalDeliveries : 0;
+  const totalTORate =
+    totalDeliveries > 0 ? totalTO / totalDeliveries : 0;
+  const totalWagesPct = totalTO > 0 ? (totalWages / totalTO) * 100 : 0;
+
+  const HEADERS = [
+    { label: "Driver Name", align: "left" as const },
+    { label: "Total T/O", align: "right" as const },
+    { label: "Total Salary/Wages", align: "right" as const },
+    { label: "Total Fuel Cost", align: "right" as const },
+    { label: "Total Gratuities", align: "right" as const },
+    { label: "No. Deliveries", align: "right" as const },
+    { label: "Wage Rate/Delivery", align: "right" as const },
+    { label: "T/O Rate/Delivery", align: "right" as const },
+    { label: "% Wages vs T/O", align: "right" as const },
+  ];
 
   return (
-    <ReportWrapper title="Driver Summary" onRun={handleRun} onExportCSV={handleExportCSV}>
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Total Drivers" value={totalDrivers} icon={<Users className="h-5 w-5" />} />
-        <StatCard label="Total Deliveries" value={totalDeliveries} icon={<Truck className="h-5 w-5" />} />
-        <StatCard label="Total Driver Wages" value={formatCurrency(totalWages)} icon={<DollarSign className="h-5 w-5" />} />
-        <StatCard label="Avg Cost/Delivery" value={formatCurrency(avgCostPerDelivery)} icon={<CalendarDays className="h-5 w-5" />} />
-      </div>
-
+    <ReportWrapper
+      title="Drivers Summary"
+      onRun={handleRun}
+      onExportCSV={handleExportCSV}
+    >
       {/* Loading */}
       {loading && (
         <div className="space-y-2">
@@ -154,42 +215,85 @@ export default function DriverSummaryPage() {
       {/* Table */}
       {!loading && data.length > 0 && (
         <div className="overflow-x-auto rounded-lg border border-base-200">
-          <table className="w-full text-sm">
+          <table className="w-full text-sm whitespace-nowrap">
             <thead>
               <tr className="bg-surface-2">
-                {["Driver Name", "Days Worked", "Total Deliveries", "Total Turnover", "Total Wages", "Total Fuel", "Total Gratuities", "Avg Del/Day", "Avg Turn/Day"].map((h) => (
-                  <th key={h} className={cn("px-4 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 sticky top-0 bg-surface-2", h === "Driver Name" ? "text-left" : "text-right")}>
-                    {h}
+                {HEADERS.map((h) => (
+                  <th
+                    key={h.label}
+                    className={cn(
+                      "px-3 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 sticky top-0 bg-surface-2",
+                      h.align === "left" ? "text-left" : "text-right"
+                    )}
+                  >
+                    {h.label}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {data.map((row) => (
-                <tr key={row.staffId} className="border-b border-base-200 hover:bg-surface-2 transition-colors">
-                  <td className="px-4 py-2 text-base-900 font-medium">{row.name}</td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">{row.daysWorked}</td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">{row.totalDeliveries}</td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(row.totalTurnover)}</td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(row.totalWages)}</td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(row.totalFuel)}</td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(row.totalGratuities)}</td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">{row.avgDeliveriesPerDay.toFixed(1)}</td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(row.avgTurnoverPerDay)}</td>
+              {data.map((r) => (
+                <tr
+                  key={r.staffId}
+                  className="border-b border-base-200 hover:bg-surface-2 transition-colors"
+                >
+                  <td className="px-3 py-1.5 text-base-900 font-medium">
+                    {r.name}
+                  </td>
+                  <td className="px-3 py-1.5 text-right font-mono text-base-900">
+                    {formatCurrency(r.totalTO)}
+                  </td>
+                  <td className="px-3 py-1.5 text-right font-mono text-base-900">
+                    {formatCurrency(r.totalWages)}
+                  </td>
+                  <td className="px-3 py-1.5 text-right font-mono text-base-900">
+                    {formatCurrency(r.totalFuel)}
+                  </td>
+                  <td className="px-3 py-1.5 text-right font-mono text-base-900">
+                    {formatCurrency(r.totalGratuities)}
+                  </td>
+                  <td className="px-3 py-1.5 text-right font-mono text-base-900">
+                    {r.numDeliveries}
+                  </td>
+                  <td className="px-3 py-1.5 text-right font-mono text-base-900">
+                    {formatCurrency(r.wageRatePerDelivery)}
+                  </td>
+                  <td className="px-3 py-1.5 text-right font-mono text-base-900">
+                    {formatCurrency(r.ratePerDelivery)}
+                  </td>
+                  <td className="px-3 py-1.5 text-right font-mono text-base-900">
+                    {r.wagesPctTO.toFixed(2)}%
+                  </td>
                 </tr>
               ))}
             </tbody>
             <tfoot>
               <tr className="bg-surface-2 font-semibold">
-                <td className="px-4 py-2 text-base-900">Totals ({totalDrivers} drivers)</td>
-                <td className="px-4 py-2 text-right font-mono text-base-900">{data.reduce((s, r) => s + r.daysWorked, 0)}</td>
-                <td className="px-4 py-2 text-right font-mono text-base-900">{totalDeliveries}</td>
-                <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(data.reduce((s, r) => s + r.totalTurnover, 0))}</td>
-                <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(totalWages)}</td>
-                <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(data.reduce((s, r) => s + r.totalFuel, 0))}</td>
-                <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(data.reduce((s, r) => s + r.totalGratuities, 0))}</td>
-                <td className="px-4 py-2 text-right font-mono text-base-900">-</td>
-                <td className="px-4 py-2 text-right font-mono text-base-900">-</td>
+                <td className="px-3 py-2 text-base-900">Total</td>
+                <td className="px-3 py-2 text-right font-mono text-base-900">
+                  {formatCurrency(totalTO)}
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-base-900">
+                  {formatCurrency(totalWages)}
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-base-900">
+                  {formatCurrency(totalFuel)}
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-base-900">
+                  {formatCurrency(totalGratuities)}
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-base-900">
+                  {totalDeliveries}
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-base-900">
+                  {formatCurrency(totalWageRate)}
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-base-900">
+                  {formatCurrency(totalTORate)}
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-base-900">
+                  {totalWagesPct.toFixed(2)}%
+                </td>
               </tr>
             </tfoot>
           </table>

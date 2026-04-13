@@ -1,117 +1,309 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { ReportWrapper, type ReportFilters } from "@/components/reports/report-wrapper";
-import { StatCard } from "@/components/ui/stat-card";
-import { cn } from "@/lib/utils";
+import {
+  ReportWrapper,
+  type ReportFilters,
+} from "@/components/reports/report-wrapper";
+import { formatCurrency, cn } from "@/lib/utils";
 import { generateCSV, triggerDownload } from "@/lib/report-utils";
-import { ClipboardList, Users, Clock, CalendarDays } from "lucide-react";
+import { ClipboardList } from "lucide-react";
 
-interface RosterRow {
-  staffId: string;
-  name: string;
-  position: string;
-  scheduledHours: number;
-  targetHours: number;
-  overUnder: number;
+// ─── Helpers ───────────────────────────────────────────────────────────────
+
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function fmtDateShort(d: Date): string {
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${dd}-${mm}-${d.getFullYear()}`;
 }
+
+function toISODate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+function hoursToHHMM(hours: number): string {
+  const h = Math.floor(hours);
+  const m = Math.round((hours - h) * 60);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function fmtNeg(amount: number): string {
+  if (amount < 0) {
+    return `(R ${Math.abs(amount).toLocaleString("en-ZA", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })})`;
+  }
+  return formatCurrency(amount);
+}
+
+// ─── Types ─────────────────────────────────────────────────────────────────
+
+interface StaffInfo {
+  id: string;
+  name: string;
+  positionId: string;
+  positionName: string;
+  positionCategory: string; // FOH or BOH
+}
+
+interface DateRow {
+  date: Date;
+  dayName: string;
+  dateFormatted: string;
+  hoursMap: Map<string, number>; // staffId -> hours
+  totalHours: number;
+}
+
+// ─── Page ──────────────────────────────────────────────────────────────────
 
 export default function BudgetRosterPage() {
   const supabase = createClient();
-  const [data, setData] = useState<RosterRow[]>([]);
+  const [dateRows, setDateRows] = useState<DateRow[]>([]);
+  const [staffList, setStaffList] = useState<StaffInfo[]>([]);
   const [loading, setLoading] = useState(false);
-  const [targetHoursPerWeek, setTargetHoursPerWeek] = useState(40);
+  const [hideNonRostered, setHideNonRostered] = useState(false);
+  const [summaryStats, setSummaryStats] = useState({
+    actualWageTotal: 0,
+    budgetWageTotal: 0,
+    prevYearNettTO: 0,
+    actualNettTO: 0,
+    budgetNettTO: 0,
+  });
 
   const handleRun = useCallback(
     async (f: ReportFilters) => {
       if (f.branchIds.length === 0) return;
       setLoading(true);
 
-      const [{ data: entries }, { data: staffList }, { data: positions }] = await Promise.all([
+      const [
+        { data: entries },
+        { data: staffRows },
+        { data: positions },
+        { data: cashups },
+      ] = await Promise.all([
         supabase
           .from("roster_entries")
           .select("*")
           .in("branch_id", f.branchIds)
           .gte("date", f.dateFrom)
-          .lte("date", f.dateTo)
-          .eq("is_off", false),
+          .lte("date", f.dateTo),
         supabase.from("staff").select("id, first_name, last_name, position_id"),
         supabase.from("positions").select("id, name"),
+        supabase
+          .from("daily_cashups")
+          .select("gross_turnover")
+          .in("branch_id", f.branchIds)
+          .gte("date", f.dateFrom)
+          .lte("date", f.dateTo),
       ]);
 
-      if (!entries || entries.length === 0) {
-        setData([]);
-        setLoading(false);
-        return;
+      const posMap = new Map(
+        (positions ?? []).map((p) => [
+          p.id,
+          { name: p.name as string },
+        ])
+      );
+
+      // Build staff info list — only staff with roster entries
+      const staffWithEntries = new Set<string>();
+      if (entries) {
+        for (const e of entries) {
+          staffWithEntries.add(e.staff_id);
+        }
       }
 
-      const staffMap = new Map((staffList ?? []).map((s) => [s.id, { name: `${s.first_name} ${s.last_name}`, positionId: s.position_id }]));
-      const posMap = new Map((positions ?? []).map((p) => [p.id, p.name]));
+      const allStaff: StaffInfo[] = (staffRows ?? [])
+        .filter((s) => staffWithEntries.has(s.id))
+        .map((s) => {
+          const pos = posMap.get(s.position_id ?? "");
+          const posName = pos?.name ?? "N/A";
+          // Infer category from position name
+          const nameLower = posName.toLowerCase();
+          const isBOH =
+            nameLower.includes("kitchen") ||
+            nameLower.includes("chef") ||
+            nameLower.includes("cook") ||
+            nameLower.includes("boh") ||
+            nameLower.includes("back of house") ||
+            nameLower.includes("prep");
+          return {
+            id: s.id,
+            name: `${s.first_name} ${s.last_name}`,
+            positionId: s.position_id ?? "",
+            positionName: posName,
+            positionCategory: isBOH ? "BOH" : "FOH",
+          };
+        })
+        .sort((a, b) => {
+          // FOH first, then BOH; within category, alphabetical
+          if (a.positionCategory !== b.positionCategory) {
+            return a.positionCategory === "FOH" ? -1 : 1;
+          }
+          return a.name.localeCompare(b.name);
+        });
 
-      // Calculate number of weeks in the date range
-      const from = new Date(f.dateFrom);
-      const to = new Date(f.dateTo);
-      const days = Math.max(1, (to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24) + 1);
-      const weeks = Math.max(1, days / 7);
-      const targetForPeriod = targetHoursPerWeek * weeks;
+      setStaffList(allStaff);
 
-      // Aggregate per staff
-      const hourMap = new Map<string, number>();
-      for (const e of entries) {
-        hourMap.set(e.staff_id, (hourMap.get(e.staff_id) ?? 0) + (e.shift_hours ?? 0));
+      // Build entry lookup: date+staffId -> hours
+      const entryLookup = new Map<string, number>();
+      if (entries) {
+        for (const e of entries) {
+          const key = `${e.date}|${e.staff_id}`;
+          const hours = e.is_off ? 0 : (e.shift_hours ?? 0);
+          entryLookup.set(key, (entryLookup.get(key) ?? 0) + hours);
+        }
       }
 
-      const rows: RosterRow[] = Array.from(hourMap.entries()).map(([staffId, scheduled]) => {
-        const info = staffMap.get(staffId);
-        return {
-          staffId,
-          name: info?.name ?? "Unknown",
-          position: posMap.get(info?.positionId ?? "") ?? "N/A",
-          scheduledHours: scheduled,
-          targetHours: targetForPeriod,
-          overUnder: scheduled - targetForPeriod,
-        };
+      // Generate all dates in the range
+      const fromDate = new Date(f.dateFrom + "T00:00:00");
+      const toDate = new Date(f.dateTo + "T00:00:00");
+      const rows: DateRow[] = [];
+      const current = new Date(fromDate);
+
+      while (current <= toDate) {
+        const iso = toISODate(current);
+        const hoursMap = new Map<string, number>();
+        let totalHours = 0;
+
+        for (const staff of allStaff) {
+          const key = `${iso}|${staff.id}`;
+          const hours = entryLookup.get(key) ?? 0;
+          hoursMap.set(staff.id, hours);
+          totalHours += hours;
+        }
+
+        rows.push({
+          date: new Date(current),
+          dayName: DAY_NAMES[current.getDay()],
+          dateFormatted: fmtDateShort(current),
+          hoursMap,
+          totalHours,
+        });
+
+        current.setDate(current.getDate() + 1);
+      }
+
+      setDateRows(rows);
+
+      // Compute summary
+      const actualTO = (cashups ?? []).reduce(
+        (s, c) => s + (c.gross_turnover ?? 0),
+        0
+      );
+      const totalDays = rows.length;
+      const budgetTO = totalDays * 15000; // default budget
+      const totalRosteredHours = rows.reduce((s, r) => s + r.totalHours, 0);
+      const avgHourlyRate = 45; // default rate
+      const actualWages = totalRosteredHours * avgHourlyRate;
+      const budgetWages = budgetTO * 0.28;
+
+      setSummaryStats({
+        actualWageTotal: actualWages,
+        budgetWageTotal: budgetWages,
+        prevYearNettTO: 0,
+        actualNettTO: actualTO,
+        budgetNettTO: budgetTO,
       });
 
-      rows.sort((a, b) => a.name.localeCompare(b.name));
-      setData(rows);
       setLoading(false);
     },
-    [supabase, targetHoursPerWeek]
+    [supabase]
   );
 
-  const handleExportCSV = useCallback(() => {
-    const headers = ["Staff Name", "Position", "Scheduled Hours", "Target Hours", "Over/Under"];
-    const rows = data.map((r) => [r.name, r.position, r.scheduledHours.toFixed(1), r.targetHours.toFixed(1), r.overUnder.toFixed(1)]);
-    triggerDownload(generateCSV(headers, rows), "budget-roster-report.csv", "text/csv");
-  }, [data]);
+  // Determine which staff to show
+  const visibleStaff = useMemo(() => {
+    if (!hideNonRostered) return staffList;
+    // Filter to staff who have at least one non-zero entry
+    return staffList.filter((s) =>
+      dateRows.some((r) => (r.hoursMap.get(s.id) ?? 0) > 0)
+    );
+  }, [staffList, dateRows, hideNonRostered]);
 
-  const totalScheduled = data.reduce((s, r) => s + r.scheduledHours, 0);
-  const totalStaff = data.length;
-  const avgHoursPerStaff = totalStaff > 0 ? totalScheduled / totalStaff : 0;
+  // Group staff by category for headers
+  const fohStaff = visibleStaff.filter(
+    (s) => s.positionCategory === "FOH"
+  );
+  const bohStaff = visibleStaff.filter(
+    (s) => s.positionCategory !== "FOH"
+  );
+
+  // Staff totals (bottom row)
+  const staffTotals = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const s of visibleStaff) {
+      let total = 0;
+      for (const row of dateRows) {
+        total += row.hoursMap.get(s.id) ?? 0;
+      }
+      totals.set(s.id, total);
+    }
+    return totals;
+  }, [visibleStaff, dateRows]);
+
+  const handleExportCSV = useCallback(() => {
+    const headers = [
+      "Day",
+      "Date",
+      ...visibleStaff.map((s) => s.name),
+      "Total Hours",
+    ];
+    const csvRows = dateRows.map((r) => [
+      r.dayName,
+      r.dateFormatted,
+      ...visibleStaff.map((s) =>
+        hoursToHHMM(r.hoursMap.get(s.id) ?? 0)
+      ),
+      hoursToHHMM(r.totalHours),
+    ]);
+    // Add totals row
+    csvRows.push([
+      "",
+      "Totals",
+      ...visibleStaff.map((s) =>
+        hoursToHHMM(staffTotals.get(s.id) ?? 0)
+      ),
+      hoursToHHMM(dateRows.reduce((s, r) => s + r.totalHours, 0)),
+    ]);
+    triggerDownload(
+      generateCSV(headers, csvRows),
+      "budget-roster-report.csv",
+      "text/csv"
+    );
+  }, [dateRows, visibleStaff, staffTotals]);
+
+  const wageDiff =
+    summaryStats.actualWageTotal - summaryStats.budgetWageTotal;
+  const toDiff = summaryStats.actualNettTO - summaryStats.budgetNettTO;
+  const actualWagesPct =
+    summaryStats.actualNettTO > 0
+      ? (summaryStats.actualWageTotal / summaryStats.actualNettTO) * 100
+      : 0;
+  const budgetWagesPct =
+    summaryStats.budgetNettTO > 0
+      ? (summaryStats.budgetWageTotal / summaryStats.budgetNettTO) * 100
+      : 0;
 
   return (
-    <ReportWrapper title="Budget Roster Report" onRun={handleRun} onExportCSV={handleExportCSV}>
-      {/* Target input */}
-      <div className="flex items-end gap-3 mb-6 print:hidden">
-        <div>
-          <label className="text-sm font-medium text-base-700 block mb-1.5">Target Hours/Week per Staff</label>
+    <ReportWrapper
+      title="Budget Roster Report"
+      onRun={handleRun}
+      onExportCSV={handleExportCSV}
+    >
+      {/* Controls */}
+      <div className="flex items-center gap-4 mb-4 print:hidden">
+        <label className="flex items-center gap-2 text-sm text-base-700 cursor-pointer">
           <input
-            type="number"
-            value={targetHoursPerWeek}
-            onChange={(e) => setTargetHoursPerWeek(Number(e.target.value) || 0)}
-            className="h-10 px-3 rounded-lg border border-base-200 bg-surface text-sm text-base-900 font-mono w-32"
+            type="checkbox"
+            checked={hideNonRostered}
+            onChange={(e) => setHideNonRostered(e.target.checked)}
+            className="rounded border-base-300"
           />
-        </div>
-      </div>
-
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard label="Total Scheduled Hours" value={totalScheduled.toFixed(1)} icon={<Clock className="h-5 w-5" />} />
-        <StatCard label="Total Staff" value={totalStaff} icon={<Users className="h-5 w-5" />} />
-        <StatCard label="Avg Hours/Staff" value={avgHoursPerStaff.toFixed(1)} icon={<CalendarDays className="h-5 w-5" />} />
-        <StatCard label="Target/Week" value={`${targetHoursPerWeek}h`} icon={<ClipboardList className="h-5 w-5" />} />
+          Hide Non-Rostered
+        </label>
       </div>
 
       {/* Loading */}
@@ -124,51 +316,247 @@ export default function BudgetRosterPage() {
       )}
 
       {/* Empty */}
-      {!loading && data.length === 0 && (
+      {!loading && dateRows.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-base-400">
           <ClipboardList className="h-12 w-12 mb-3" />
           <p className="text-sm">No data for selected period</p>
         </div>
       )}
 
-      {/* Table */}
-      {!loading && data.length > 0 && (
-        <div className="overflow-x-auto rounded-lg border border-base-200">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-surface-2">
-                {["Staff Name", "Position", "Scheduled Hours", "Target Hours", "Over/Under"].map((h) => (
-                  <th key={h} className={cn("px-4 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 sticky top-0 bg-surface-2", h === "Staff Name" || h === "Position" ? "text-left" : "text-right")}>
-                    {h}
+      {/* Pivot Table */}
+      {!loading && dateRows.length > 0 && (
+        <>
+          <div className="overflow-x-auto rounded-lg border border-base-200">
+            <table className="text-sm whitespace-nowrap">
+              {/* Column group headers: Day | Date | FOH ... | BOH ... | Total */}
+              <thead>
+                {/* Category header row */}
+                <tr className="bg-surface-2 border-b border-base-200">
+                  <th className="px-2 py-1.5" />
+                  <th className="px-2 py-1.5" />
+                  {fohStaff.length > 0 && (
+                    <th
+                      colSpan={fohStaff.length}
+                      className="px-2 py-1.5 text-center text-xs uppercase tracking-wide font-bold text-blue-600 border-l border-base-200"
+                    >
+                      FRONT OF HOUSE
+                    </th>
+                  )}
+                  {bohStaff.length > 0 && (
+                    <th
+                      colSpan={bohStaff.length}
+                      className="px-2 py-1.5 text-center text-xs uppercase tracking-wide font-bold text-orange-600 border-l border-base-200"
+                    >
+                      BACK OF HOUSE
+                    </th>
+                  )}
+                  <th className="px-2 py-1.5 border-l border-base-200" />
+                </tr>
+
+                {/* Staff name header row */}
+                <tr className="bg-surface-2">
+                  <th className="px-2 py-1.5 text-xs uppercase tracking-wide font-semibold text-base-400 text-left sticky left-0 bg-surface-2 z-10">
+                    Day
                   </th>
+                  <th className="px-2 py-1.5 text-xs uppercase tracking-wide font-semibold text-base-400 text-left sticky left-[3rem] bg-surface-2 z-10">
+                    Date
+                  </th>
+                  {fohStaff.map((s, i) => (
+                    <th
+                      key={s.id}
+                      className={cn(
+                        "px-2 py-1.5 text-xs font-semibold text-base-500 text-center min-w-[60px]",
+                        i === 0 && "border-l border-base-200"
+                      )}
+                      title={s.positionName}
+                    >
+                      <div className="truncate max-w-[80px]">
+                        {s.name.split(" ")[0]}
+                      </div>
+                    </th>
+                  ))}
+                  {bohStaff.map((s, i) => (
+                    <th
+                      key={s.id}
+                      className={cn(
+                        "px-2 py-1.5 text-xs font-semibold text-base-500 text-center min-w-[60px]",
+                        i === 0 && "border-l border-base-200"
+                      )}
+                      title={s.positionName}
+                    >
+                      <div className="truncate max-w-[80px]">
+                        {s.name.split(" ")[0]}
+                      </div>
+                    </th>
+                  ))}
+                  <th className="px-2 py-1.5 text-xs uppercase tracking-wide font-semibold text-base-400 text-center border-l border-base-200">
+                    Total Hours
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {dateRows.map((row, idx) => (
+                  <tr
+                    key={idx}
+                    className="border-b border-base-200 hover:bg-surface-2 transition-colors"
+                  >
+                    <td className="px-2 py-1 text-base-900 sticky left-0 bg-surface z-10">
+                      {row.dayName}
+                    </td>
+                    <td className="px-2 py-1 text-base-900 sticky left-[3rem] bg-surface z-10">
+                      {row.dateFormatted}
+                    </td>
+                    {fohStaff.map((s, i) => {
+                      const hours = row.hoursMap.get(s.id) ?? 0;
+                      return (
+                        <td
+                          key={s.id}
+                          className={cn(
+                            "px-2 py-1 text-center font-mono text-base-700",
+                            i === 0 && "border-l border-base-200",
+                            hours === 0 && "text-base-300"
+                          )}
+                        >
+                          {hoursToHHMM(hours)}
+                        </td>
+                      );
+                    })}
+                    {bohStaff.map((s, i) => {
+                      const hours = row.hoursMap.get(s.id) ?? 0;
+                      return (
+                        <td
+                          key={s.id}
+                          className={cn(
+                            "px-2 py-1 text-center font-mono text-base-700",
+                            i === 0 && "border-l border-base-200",
+                            hours === 0 && "text-base-300"
+                          )}
+                        >
+                          {hoursToHHMM(hours)}
+                        </td>
+                      );
+                    })}
+                    <td className="px-2 py-1 text-center font-mono font-semibold text-base-900 border-l border-base-200">
+                      {hoursToHHMM(row.totalHours)}
+                    </td>
+                  </tr>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.map((row) => (
-                <tr key={row.staffId} className="border-b border-base-200 hover:bg-surface-2 transition-colors">
-                  <td className="px-4 py-2 text-base-900 font-medium">{row.name}</td>
-                  <td className="px-4 py-2 text-base-900">{row.position}</td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">{row.scheduledHours.toFixed(1)}</td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">{row.targetHours.toFixed(1)}</td>
-                  <td className={cn("px-4 py-2 text-right font-mono font-semibold", row.overUnder < 0 ? "text-red-600" : row.overUnder > 0 ? "text-green-600" : "text-base-900")}>
-                    {row.overUnder > 0 ? "+" : ""}{row.overUnder.toFixed(1)}
+              </tbody>
+              <tfoot>
+                <tr className="bg-surface-2 font-semibold">
+                  <td className="px-2 py-2 text-base-900 sticky left-0 bg-surface-2 z-10">
+                    Totals
+                  </td>
+                  <td className="px-2 py-2 sticky left-[3rem] bg-surface-2 z-10" />
+                  {fohStaff.map((s, i) => (
+                    <td
+                      key={s.id}
+                      className={cn(
+                        "px-2 py-2 text-center font-mono text-base-900",
+                        i === 0 && "border-l border-base-200"
+                      )}
+                    >
+                      {hoursToHHMM(staffTotals.get(s.id) ?? 0)}
+                    </td>
+                  ))}
+                  {bohStaff.map((s, i) => (
+                    <td
+                      key={s.id}
+                      className={cn(
+                        "px-2 py-2 text-center font-mono text-base-900",
+                        i === 0 && "border-l border-base-200"
+                      )}
+                    >
+                      {hoursToHHMM(staffTotals.get(s.id) ?? 0)}
+                    </td>
+                  ))}
+                  <td className="px-2 py-2 text-center font-mono font-bold text-base-900 border-l border-base-200">
+                    {hoursToHHMM(
+                      dateRows.reduce((s, r) => s + r.totalHours, 0)
+                    )}
                   </td>
                 </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="bg-surface-2 font-semibold">
-                <td className="px-4 py-2 text-base-900" colSpan={2}>Totals ({totalStaff} staff)</td>
-                <td className="px-4 py-2 text-right font-mono text-base-900">{totalScheduled.toFixed(1)}</td>
-                <td className="px-4 py-2 text-right font-mono text-base-900">{data.reduce((s, r) => s + r.targetHours, 0).toFixed(1)}</td>
-                <td className={cn("px-4 py-2 text-right font-mono font-semibold", data.reduce((s, r) => s + r.overUnder, 0) < 0 ? "text-red-600" : "text-green-600")}>
-                  {data.reduce((s, r) => s + r.overUnder, 0).toFixed(1)}
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
+              </tfoot>
+            </table>
+          </div>
+
+          {/* Summary stats block */}
+          <div className="mt-6 rounded-lg border border-base-200 bg-surface p-4">
+            <h3 className="text-sm font-semibold text-base-700 mb-3 uppercase tracking-wide">
+              Summary
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-x-8 gap-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-base-500">Actual Wage Total</span>
+                <span className="font-mono text-base-900">
+                  {formatCurrency(summaryStats.actualWageTotal)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-base-500">Budget Wage Total</span>
+                <span className="font-mono text-base-900">
+                  {formatCurrency(summaryStats.budgetWageTotal)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-base-500">Wage Difference</span>
+                <span
+                  className={cn(
+                    "font-mono font-semibold",
+                    wageDiff < 0 ? "text-red-600" : "text-base-900"
+                  )}
+                >
+                  {fmtNeg(wageDiff)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-base-500">Previous Year Nett T/O</span>
+                <span className="font-mono text-base-900">
+                  {formatCurrency(summaryStats.prevYearNettTO)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-base-500">Actual Nett Turnover</span>
+                <span className="font-mono text-base-900">
+                  {formatCurrency(summaryStats.actualNettTO)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-base-500">Budget Nett Turnover</span>
+                <span className="font-mono text-base-900">
+                  {formatCurrency(summaryStats.budgetNettTO)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-base-500">Turnover Difference</span>
+                <span
+                  className={cn(
+                    "font-mono font-semibold",
+                    toDiff < 0 ? "text-red-600" : "text-base-900"
+                  )}
+                >
+                  {fmtNeg(toDiff)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-base-500">
+                  Actual Wages % Of Turnover
+                </span>
+                <span className="font-mono text-base-900">
+                  {actualWagesPct.toFixed(2)}%
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-base-500">
+                  Budget Wages % Of Turnover
+                </span>
+                <span className="font-mono text-base-900">
+                  {budgetWagesPct.toFixed(2)}%
+                </span>
+              </div>
+            </div>
+          </div>
+        </>
       )}
     </ReportWrapper>
   );
