@@ -704,7 +704,7 @@ export default function TurnoverBudgetPage() {
                 "h-10 px-4 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5",
                 setupSaved
                   ? "bg-green-100 text-green-700"
-                  : "bg-brand-500 hover:bg-brand-600 text-white",
+                  : "bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white",
                 (setupSaving || setupRows.length === 0) &&
                   "opacity-50 cursor-not-allowed"
               )}
