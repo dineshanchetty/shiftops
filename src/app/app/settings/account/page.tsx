@@ -14,6 +14,8 @@ import {
   AlertTriangle,
   Check,
   X,
+  Upload,
+  ImageIcon,
 } from "lucide-react";
 
 /* ---------- Types ---------- */
@@ -29,6 +31,7 @@ interface TenantData {
   name: string;
   slug: string;
   billingEmail: string;
+  logoUrl: string | null;
 }
 
 type FeedbackState = {
@@ -75,9 +78,14 @@ export default function AccountSettingsPage() {
     name: "",
     slug: "",
     billingEmail: "",
+    logoUrl: null,
   });
   const [savingCompany, setSavingCompany] = useState(false);
   const [companyFeedback, setCompanyFeedback] = useState<FeedbackState>(null);
+
+  // Logo
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [logoFeedback, setLogoFeedback] = useState<FeedbackState>(null);
 
   // Password
   const [showPasswordForm, setShowPasswordForm] = useState(false);
@@ -109,7 +117,7 @@ export default function AccountSettingsPage() {
     if (tenantId) {
       const { data: tenantRow } = await supabase
         .from("tenants")
-        .select("id, name, slug, billing_email")
+        .select("id, name, slug, billing_email, logo_url")
         .eq("id", tenantId)
         .single();
 
@@ -119,6 +127,7 @@ export default function AccountSettingsPage() {
           name: tenantRow.name,
           slug: tenantRow.slug,
           billingEmail: tenantRow.billing_email ?? "",
+          logoUrl: tenantRow.logo_url ?? null,
         });
       }
     }
@@ -173,6 +182,87 @@ export default function AccountSettingsPage() {
       setCompanyFeedback({ type: "success", message: "Company details updated." });
     }
     setSavingCompany(false);
+  }
+
+  /* ---------- Logo upload ---------- */
+
+  async function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file size (max 100KB)
+    if (file.size > 100 * 1024) {
+      setLogoFeedback({
+        type: "error",
+        message: "File is too large. Maximum size is 100KB.",
+      });
+      return;
+    }
+
+    // Validate file type
+    const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
+    if (!allowedTypes.includes(file.type)) {
+      setLogoFeedback({
+        type: "error",
+        message: "Invalid file type. Please use PNG, JPG, or WebP.",
+      });
+      return;
+    }
+
+    setUploadingLogo(true);
+    setLogoFeedback(null);
+
+    try {
+      // Convert to base64 data URL
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error("Failed to read file"));
+        reader.readAsDataURL(file);
+      });
+
+      const supabase = createClient();
+      const { error } = await supabase
+        .from("tenants")
+        .update({ logo_url: dataUrl })
+        .eq("id", tenant.id);
+
+      if (error) {
+        setLogoFeedback({ type: "error", message: error.message });
+      } else {
+        setTenant((t) => ({ ...t, logoUrl: dataUrl }));
+        setLogoFeedback({ type: "success", message: "Logo updated." });
+      }
+    } catch {
+      setLogoFeedback({
+        type: "error",
+        message: "Failed to process the image.",
+      });
+    }
+
+    setUploadingLogo(false);
+    // Reset input so the same file can be re-selected
+    e.target.value = "";
+  }
+
+  async function handleRemoveLogo() {
+    setUploadingLogo(true);
+    setLogoFeedback(null);
+
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("tenants")
+      .update({ logo_url: null })
+      .eq("id", tenant.id);
+
+    if (error) {
+      setLogoFeedback({ type: "error", message: error.message });
+    } else {
+      setTenant((t) => ({ ...t, logoUrl: null }));
+      setLogoFeedback({ type: "success", message: "Logo removed." });
+    }
+
+    setUploadingLogo(false);
   }
 
   /* ---------- Change password ---------- */
@@ -299,6 +389,63 @@ export default function AccountSettingsPage() {
           </div>
 
           <div className="space-y-4">
+            {/* Company Logo */}
+            <div>
+              <label className="text-sm font-medium text-base-700 mb-2 block">
+                Company Logo
+              </label>
+              <div className="flex items-start gap-4">
+                {/* Preview */}
+                <div className="h-16 w-16 shrink-0 rounded-full border-2 border-dashed border-base-200 bg-surface-2 flex items-center justify-center overflow-hidden">
+                  {tenant.logoUrl ? (
+                    <img
+                      src={tenant.logoUrl}
+                      alt="Company logo"
+                      className="h-full w-full object-cover rounded-full"
+                    />
+                  ) : (
+                    <ImageIcon size={24} className="text-base-300" />
+                  )}
+                </div>
+
+                {/* Upload area */}
+                <div className="flex-1 space-y-2">
+                  <label
+                    className={`
+                      flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-base-200
+                      bg-surface px-4 py-3 text-sm text-base-500 cursor-pointer
+                      hover:border-accent hover:text-accent hover:bg-surface-2 transition-colors
+                      ${uploadingLogo ? "opacity-50 pointer-events-none" : ""}
+                    `}
+                  >
+                    <Upload size={16} />
+                    {uploadingLogo ? "Uploading..." : "Upload logo"}
+                    <input
+                      type="file"
+                      accept=".png,.jpg,.jpeg,.webp"
+                      onChange={handleLogoUpload}
+                      className="sr-only"
+                      disabled={uploadingLogo}
+                    />
+                  </label>
+                  <p className="text-xs text-base-400">
+                    PNG, JPG, or WebP. Max 100KB.
+                  </p>
+                  {tenant.logoUrl && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveLogo}
+                      disabled={uploadingLogo}
+                      className="text-xs text-red-500 hover:text-red-700 transition-colors"
+                    >
+                      Remove logo
+                    </button>
+                  )}
+                  <Feedback state={logoFeedback} />
+                </div>
+              </div>
+            </div>
+
             <Input
               label="Company Name"
               value={tenant.name}
