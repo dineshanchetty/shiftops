@@ -70,6 +70,7 @@ export function CashupForm({
   const isAura = !!auraImport;
   const [isPending, startTransition] = useTransition();
   const [readOnly, setReadOnly] = useState(initialReadOnly);
+  const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [saved, setSaved] = useState(false);
   const [activeTab, setActiveTab] = useState<CashupTab>("takings");
 
@@ -326,7 +327,14 @@ export function CashupForm({
         );
         if (submitResult.success) {
           setReadOnly(true);
+          setFeedback({ type: "success", text: "Cashup submitted successfully! The form is now locked." });
+          // Auto-clear after 10 seconds
+          setTimeout(() => setFeedback(null), 10000);
+        } else {
+          setFeedback({ type: "error", text: submitResult.error ?? "Failed to submit cashup." });
         }
+      } else {
+        setFeedback({ type: "error", text: saveResult.error ?? "Failed to save cashup." });
       }
     });
   }, [
@@ -388,6 +396,27 @@ export function CashupForm({
     <div className="flex gap-6 items-start">
       {/* Main form */}
       <div className="flex-1 min-w-0 pb-32 md:pb-8">
+        {/* ── Feedback banner ──────────────────────────────────────── */}
+        {feedback && (
+          <div
+            className={cn(
+              "mb-4 rounded-lg px-4 py-3 text-sm flex items-center justify-between",
+              feedback.type === "success"
+                ? "bg-green-50 text-green-800 border border-green-200"
+                : "bg-red-50 text-red-800 border border-red-200"
+            )}
+          >
+            <span>{feedback.text}</span>
+            <button
+              type="button"
+              onClick={() => setFeedback(null)}
+              className="text-current opacity-60 hover:opacity-100 ml-2"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* ── Tab bar ───────────────────────────────────────────────── */}
         <div className="border-b border-base-200 mb-6">
           <nav className="flex gap-0" aria-label="Cashup tabs">
