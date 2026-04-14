@@ -14,6 +14,39 @@ export type Database = {
   }
   public: {
     Tables: {
+      daily_budgets: {
+        Row: {
+          id: string
+          tenant_id: string
+          branch_id: string
+          date: string
+          budget_amount: number
+          prev_year_turnover: number | null
+          markup_pct: number | null
+          created_at: string | null
+        }
+        Insert: {
+          id?: string
+          tenant_id: string
+          branch_id: string
+          date: string
+          budget_amount: number
+          prev_year_turnover?: number | null
+          markup_pct?: number | null
+          created_at?: string | null
+        }
+        Update: {
+          id?: string
+          tenant_id?: string
+          branch_id?: string
+          date?: string
+          budget_amount?: number
+          prev_year_turnover?: number | null
+          markup_pct?: number | null
+          created_at?: string | null
+        }
+        Relationships: []
+      }
       attendance: {
         Row: {
           id: string
