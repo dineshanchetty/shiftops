@@ -9,12 +9,18 @@ import {
   CardDescription,
   CardContent,
 } from "@/components/ui/card";
-import { GitBranch, Link2, UserCog, CreditCard, ArrowRight } from "lucide-react";
+import { GitBranch, Link2, UserCog, CreditCard, ArrowRight, Tag } from "lucide-react";
 
 const settingsCards = [
   {
-    title: "Branch Settings",
-    description: "Manage your branches, brands, and locations.",
+    title: "Brands",
+    description: "Manage your franchise brands and logos (Steers, Debonairs, etc.).",
+    href: "/app/settings/brands",
+    icon: Tag,
+  },
+  {
+    title: "Branches",
+    description: "Manage your branch locations, operating hours, and Aura POS connections.",
     href: "/app/settings/branches",
     icon: GitBranch,
   },
