@@ -218,6 +218,7 @@ export default function CashupPage() {
               </p>
             </div>
           ) : (
+            <div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-surface">
@@ -311,6 +312,7 @@ export default function CashupPage() {
             <p className="text-[10px] text-gray-400 mt-2 hidden md:block">
               *Variance = (Turnover - Discounts + Del Charges - Credit Cards - Debtors) - Cash Banked. Excludes online payments — see full breakdown in the cashup form.
             </p>
+            </div>
           )}
         </div>
       )}
