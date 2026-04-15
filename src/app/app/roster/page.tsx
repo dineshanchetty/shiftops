@@ -10,7 +10,8 @@ import { RosterSummary } from "@/components/roster/roster-summary";
 import { ShiftEditor } from "@/components/roster/shift-editor";
 import { getRosterEntries, saveRosterEntries, deleteRosterEntry } from "./actions";
 import { exportRosterPdf } from "./export-pdf";
-import { FileDown } from "lucide-react";
+import { FileDown, Wand2 } from "lucide-react";
+import Link from "next/link";
 import type { Branch, Position, SubPosition, Staff, RosterEntry } from "@/lib/types";
 
 type EntryWithStaff = RosterEntry & {
@@ -248,10 +249,18 @@ export default function RosterPage() {
     <PageShell
       title="Roster"
       action={
-        <Button variant="secondary" size="sm" onClick={handleExportPdf}>
-          <FileDown size={16} />
-          Export PDF
-        </Button>
+        <div className="flex items-center gap-2">
+          <Link href="/app/roster/auto-roster">
+            <Button variant="secondary" size="sm">
+              <Wand2 size={16} />
+              Auto-Roster
+            </Button>
+          </Link>
+          <Button variant="secondary" size="sm" onClick={handleExportPdf}>
+            <FileDown size={16} />
+            Export PDF
+          </Button>
+        </div>
       }
     >
       {/* Filter Bar — sticky so calendar scrolls underneath */}

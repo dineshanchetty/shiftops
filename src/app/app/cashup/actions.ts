@@ -276,6 +276,14 @@ export async function getUserBranches(): Promise<
   return data ?? [];
 }
 
+// ─── Get tenant ID ────────────────────────────────────────────────────────────
+
+export async function getUserTenantId(): Promise<string> {
+  const supabase = await createClient();
+  const { data } = await supabase.rpc("get_user_tenant_id");
+  return data ?? "";
+}
+
 // ─── Save cashup ──────────────────────────────────────────────────────────────
 
 export async function saveCashup(input: SaveCashupInput) {

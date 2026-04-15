@@ -18,6 +18,7 @@ import {
   type SaveCashupInput,
 } from "@/app/app/cashup/actions";
 import { AttendanceTable } from "./attendance-table";
+import { DocumentUpload } from "./document-upload";
 import type { AuraImport } from "@/lib/types";
 
 // ─── Channel display names ───────────────────────────────────────────────────
@@ -32,7 +33,7 @@ const CHANNEL_LABELS: Record<string, string> = {
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────
 
-type CashupTab = "takings" | "drivers" | "banking" | "purchases" | "attendance";
+type CashupTab = "takings" | "drivers" | "banking" | "purchases" | "attendance" | "documents";
 
 const TABS: { key: CashupTab; label: string }[] = [
   { key: "takings", label: "Takings" },
@@ -40,6 +41,7 @@ const TABS: { key: CashupTab; label: string }[] = [
   { key: "banking", label: "Banking" },
   { key: "purchases", label: "Purchases" },
   { key: "attendance", label: "Attendance" },
+  { key: "documents", label: "Documents" },
 ];
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -53,6 +55,7 @@ interface CashupFormProps {
   channels: { channel_name: string }[];
   readOnly: boolean;
   rosteredStaff?: RosteredStaffEntry[];
+  tenantId?: string;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -66,6 +69,7 @@ export function CashupForm({
   channels,
   readOnly: initialReadOnly,
   rosteredStaff = [],
+  tenantId = "",
 }: CashupFormProps) {
   const isAura = !!auraImport;
   const [isPending, startTransition] = useTransition();
@@ -659,6 +663,17 @@ export function CashupForm({
             rosteredStaff={rosteredStaff}
             date={date}
             branchId={branchId}
+            readOnly={readOnly}
+          />
+        </div>
+
+        {/* ── Tab: Documents ────────────────────────────────────────── */}
+        <div className={activeTab === "documents" ? "block" : "hidden"}>
+          <DocumentUpload
+            cashupId={existingCashup?.id ?? null}
+            creditCards={creditCards}
+            cashBanked={cashBanked}
+            tenantId={tenantId}
             readOnly={readOnly}
           />
         </div>

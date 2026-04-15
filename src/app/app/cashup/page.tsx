@@ -20,6 +20,7 @@ import {
   getRosteredStaff,
   getPaymentChannels,
   getUserBranches,
+  getUserTenantId,
   unlockCashup,
   getCashupHistory,
   type CashupWithRelations,
@@ -51,6 +52,7 @@ export default function CashupPage() {
   const [status, setStatus] = useState<StatusBanner>(null);
   const [loaded, setLoaded] = useState(false);
   const [formKey, setFormKey] = useState(0);
+  const [tenantId, setTenantId] = useState("");
 
   // ─── Cashup history ────────────────────────────────────────────────
   const [history, setHistory] = useState<CashupHistoryRow[]>([]);
@@ -61,8 +63,9 @@ export default function CashupPage() {
     if (branchesLoaded) return;
     startTransition(async () => {
       try {
-        const b = await getUserBranches();
+        const [b, tid] = await Promise.all([getUserBranches(), getUserTenantId()]);
         setBranches(b);
+        setTenantId(tid);
         if (b.length === 1) {
           setBranchId(b[0].id);
         }
@@ -368,6 +371,7 @@ export default function CashupPage() {
           channels={channels}
           readOnly={status === "submitted"}
           rosteredStaff={rosteredStaff}
+          tenantId={tenantId}
         />
       )}
 
