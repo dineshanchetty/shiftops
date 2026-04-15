@@ -229,13 +229,24 @@ export default function CashupPage() {
                     <th className="px-4 py-2 text-right hidden md:table-cell">
                       Cash Banked
                     </th>
+                    <th className="px-4 py-2 text-right hidden md:table-cell" title="T/O - Discounts + Del Charges - CC - Debtors - Cash Banked (excl. online payments)">
+                      Variance*
+                    </th>
                     <th className="px-4 py-2">Status</th>
                     <th className="px-4 py-2 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {history.map((row, idx) => {
+                    const turnover = row.gross_turnover ?? 0;
+                    const discounts = row.discounts ?? 0;
+                    const delCharges = row.delivery_charges ?? 0;
+                    const creditCards = row.credit_cards ?? 0;
+                    const debtors = row.debtors ?? 0;
                     const cashBanked = row.cash_banked ?? 0;
+                    // Approximate Daily Banking (excl. online payments which need a separate query)
+                    const approxBanking = turnover - discounts + delCharges - creditCards - debtors;
+                    const variance = approxBanking - cashBanked;
 
                     return (
                       <tr
@@ -256,6 +267,17 @@ export default function CashupPage() {
                           {row.cash_banked != null
                             ? formatCurrency(row.cash_banked)
                             : "-"}
+                        </td>
+                        <td className="px-4 py-2.5 text-right font-mono hidden md:table-cell"
+                            title={`T/O ${formatCurrency(turnover)} - Disc ${formatCurrency(discounts)} + Del ${formatCurrency(delCharges)} - CC ${formatCurrency(creditCards)} - Dbt ${formatCurrency(debtors)} = ${formatCurrency(approxBanking)} - Banked ${formatCurrency(cashBanked)}`}
+                        >
+                          {variance === 0 ? (
+                            <span className="text-green-600">—</span>
+                          ) : (
+                            <span className={variance > 0 ? "text-amber-600" : "text-red-600"}>
+                              {formatCurrency(variance)}
+                            </span>
+                          )}
                         </td>
                         <td className="px-4 py-2.5">
                           <span
@@ -286,6 +308,9 @@ export default function CashupPage() {
                 </tbody>
               </table>
             </div>
+            <p className="text-[10px] text-gray-400 mt-2 hidden md:block">
+              *Variance = (Turnover - Discounts + Del Charges - Credit Cards - Debtors) - Cash Banked. Excludes online payments — see full breakdown in the cashup form.
+            </p>
           )}
         </div>
       )}
