@@ -3,7 +3,7 @@
 import { useMemo, useState, useRef, useCallback, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { formatTime } from "@/lib/utils";
-import { Plus, Pencil, X } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/client";
 import type { RosterEntry, Staff, Position } from "@/lib/types";
@@ -435,10 +435,7 @@ function DailyDetailPanel({
             {staffCount} staff &middot; {Math.round(totalHours)}h total
           </p>
         </div>
-        <Button variant="secondary" size="sm" onClick={onEditShifts}>
-          <Pencil size={14} />
-          Edit Shifts
-        </Button>
+        {/* Staff can be swapped via dropdown on each bar */}
       </div>
 
       {/* Gantt Timeline */}
@@ -497,16 +494,44 @@ function DailyDetailPanel({
 
                 return (
                   <div key={entry.id} className="flex items-center group">
-                    {/* Staff name */}
+                    {/* Staff name — dropdown to swap */}
                     <div className="w-[140px] sm:w-[180px] shrink-0 pr-3 py-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
                         <span
                           className="inline-block h-2 w-2 rounded-full shrink-0"
                           style={{ backgroundColor: colors.bg }}
                         />
-                        <span className="text-xs font-medium text-base-700 truncate">
-                          {entry.staff.first_name} {entry.staff.last_name}
-                        </span>
+                        <select
+                          className="text-xs font-medium text-base-700 bg-transparent border-none outline-none cursor-pointer truncate max-w-[120px] sm:max-w-[150px] hover:text-accent appearance-none"
+                          value={entry.staff_id}
+                          onChange={async (e) => {
+                            const newStaffId = e.target.value;
+                            if (newStaffId === entry.staff_id) return;
+                            const newStaff = allStaff.find(s => s.id === newStaffId);
+                            if (!newStaff) return;
+                            // Update locally
+                            setLocalEntries(prev => prev.map(le =>
+                              le.id === entry.id
+                                ? { ...le, staff_id: newStaffId, staff: { first_name: newStaff.first_name, last_name: newStaff.last_name, position_id: newStaff.position_id, sub_position_id: newStaff.sub_position_id ?? null } }
+                                : le
+                            ));
+                            // Save to DB
+                            await supabase.from("roster_entries").update({ staff_id: newStaffId }).eq("id", entry.id);
+                            onEntryUpdated?.();
+                          }}
+                        >
+                          <option value={entry.staff_id}>
+                            {entry.staff.first_name} {entry.staff.last_name.charAt(0)}.
+                          </option>
+                          {allStaff
+                            .filter(s => s.id !== entry.staff_id && !localEntries.some(le => le.staff_id === s.id && le.id !== entry.id))
+                            .map(s => (
+                              <option key={s.id} value={s.id}>
+                                {s.first_name} {s.last_name.charAt(0)}.
+                              </option>
+                            ))
+                          }
+                        </select>
                       </div>
                     </div>
 
