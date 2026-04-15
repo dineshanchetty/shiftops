@@ -28,16 +28,33 @@ interface PayrollRow {
   earnings_desc: string;
 }
 
-/** Count Sundays between two date strings (inclusive). */
-function countSundays(from: string, to: string): number {
-  let count = 0;
-  const d = new Date(from);
-  const end = new Date(to);
-  while (d <= end) {
-    if (d.getDay() === 0) count++;
-    d.setDate(d.getDate() + 1);
-  }
-  return count;
+// South Africa 2026 public holidays (YYYY-MM-DD)
+const SA_PUBLIC_HOLIDAYS_2026 = new Set([
+  "2026-01-01", // New Year's Day
+  "2026-03-21", // Human Rights Day
+  "2026-04-03", // Good Friday
+  "2026-04-06", // Family Day
+  "2026-04-27", // Freedom Day
+  "2026-05-01", // Workers' Day
+  "2026-06-16", // Youth Day
+  "2026-08-09", // National Women's Day
+  "2026-08-10", // Public holiday (Women's Day observed Mon)
+  "2026-09-24", // Heritage Day
+  "2026-12-16", // Day of Reconciliation
+  "2026-12-25", // Christmas Day
+  "2026-12-26", // Day of Goodwill
+]);
+
+const DEFAULT_HOURLY_RATE = 35; // R35/hr default
+const SUNDAY_MULTIPLIER = 2;
+const PH_MULTIPLIER = 2;
+
+/** Classify a date string as 'normal', 'sunday', or 'public_holiday' */
+function classifyDay(dateStr: string): "normal" | "sunday" | "public_holiday" {
+  if (SA_PUBLIC_HOLIDAYS_2026.has(dateStr)) return "public_holiday";
+  const d = new Date(dateStr + "T00:00:00");
+  if (d.getDay() === 0) return "sunday";
+  return "normal";
 }
 
 export default function PayrollExportPage() {
@@ -95,10 +112,8 @@ export default function PayrollExportPage() {
         (positions ?? []).map((p) => [p.id, p.name])
       );
 
-      const sundaysInPeriod = countSundays(f.dateFrom, f.dateTo);
-
       if (rosterEntries && rosterEntries.length > 0) {
-        // Group by staff
+        // Group by staff with per-day classification
         const byStaff = new Map<
           string,
           {
@@ -107,7 +122,11 @@ export default function PayrollExportPage() {
             last_name: string;
             id_number: string;
             position_id: string | null;
-            total_hours: number;
+            normal_hours: number;
+            sunday_hours: number;
+            ph_hours: number;
+            leave_hours: number;
+            overtime_hours: number;
             daily_hours: number[];
           }
         >();
@@ -129,58 +148,81 @@ export default function PayrollExportPage() {
         })[]) {
           if (!re.staff) continue;
 
-          // Prefer attendance actual_hours if confirmed, else roster shift_hours
+          // Check if this is a leave/absent day
           const attendanceArr = re.attendance;
+          const isLeave =
+            attendanceArr &&
+            attendanceArr.length > 0 &&
+            attendanceArr.some((a) => a.status === "absent" || a.status === "leave");
+
+          // Prefer attendance actual_hours if confirmed, else roster shift_hours
           const confirmedAttendance =
             attendanceArr && attendanceArr.length > 0
               ? attendanceArr.find((a) => a.status === "confirmed")
               : null;
           const hours = confirmedAttendance?.actual_hours ?? re.shift_hours ?? 0;
 
+          const dayType = classifyDay(re.date);
+          const overtime = Math.max(0, hours - 9);
+          const regularHours = hours - overtime;
+
           const existing = byStaff.get(re.staff_id);
           if (existing) {
-            existing.total_hours += hours;
             existing.daily_hours.push(hours);
+            existing.overtime_hours += overtime;
+            if (isLeave) {
+              existing.leave_hours += regularHours;
+            } else if (dayType === "public_holiday") {
+              existing.ph_hours += regularHours;
+            } else if (dayType === "sunday") {
+              existing.sunday_hours += regularHours;
+            } else {
+              existing.normal_hours += regularHours;
+            }
           } else {
-            byStaff.set(re.staff_id, {
+            const entry = {
               staff_id: re.staff_id,
               first_name: re.staff.first_name,
               last_name: re.staff.last_name,
               id_number: re.staff.id_number ?? "",
               position_id: re.staff.position_id,
-              total_hours: hours,
+              normal_hours: 0,
+              sunday_hours: 0,
+              ph_hours: 0,
+              leave_hours: 0,
+              overtime_hours: overtime,
               daily_hours: [hours],
-            });
+            };
+            if (isLeave) {
+              entry.leave_hours = regularHours;
+            } else if (dayType === "public_holiday") {
+              entry.ph_hours = regularHours;
+            } else if (dayType === "sunday") {
+              entry.sunday_hours = regularHours;
+            } else {
+              entry.normal_hours = regularHours;
+            }
+            byStaff.set(re.staff_id, entry);
           }
         }
 
         const rows: PayrollRow[] = Array.from(byStaff.values()).map((s) => {
-          // Overtime: hours > 9 per day
-          const overtimeHours = s.daily_hours.reduce(
-            (sum, h) => sum + Math.max(0, h - 9),
-            0
-          );
-          const normalHoursRaw = s.total_hours - overtimeHours;
-
-          // Sunday hours estimate: proportional allocation
-          const totalDays = s.daily_hours.length;
-          const avgHoursPerDay = totalDays > 0 ? s.total_hours / totalDays : 0;
-          const sundayHours = sundaysInPeriod * avgHoursPerDay;
-
-          const normalHours = Math.max(0, normalHoursRaw - sundayHours);
-
-          // Wages: driver wages from cashup if available, else 0
-          const driverWages = driverWagesMap.get(s.staff_id) ?? 0;
-          const totalWages = driverWages;
-
           const position = s.position_id
             ? posMap.get(s.position_id) ?? ""
             : "";
 
-          // Earnings code: drivers get 1000 (Hourly), salary staff get 5000
-          const isDriver = position.toLowerCase().includes("driver");
-          const earningsCode = isDriver ? "1000" : "5000";
-          const earningsDesc = isDriver ? "Hourly" : "Basic Salary";
+          // Wages: driver wages from cashup if available, else calculate from hours x rate
+          const driverWages = driverWagesMap.get(s.staff_id) ?? 0;
+          const calculatedWages =
+            s.normal_hours * DEFAULT_HOURLY_RATE +
+            s.sunday_hours * DEFAULT_HOURLY_RATE * SUNDAY_MULTIPLIER +
+            s.ph_hours * DEFAULT_HOURLY_RATE * PH_MULTIPLIER +
+            s.leave_hours * DEFAULT_HOURLY_RATE +
+            s.overtime_hours * DEFAULT_HOURLY_RATE * 1.5;
+          const totalWages = driverWages > 0 ? driverWages : calculatedWages;
+
+          const totalHours =
+            s.normal_hours + s.sunday_hours + s.ph_hours + s.leave_hours + s.overtime_hours;
 
           // Short employee code: first 3 chars of last name + first 2 of first
           const empCode = (
@@ -194,14 +236,14 @@ export default function PayrollExportPage() {
             first_name: s.first_name,
             id_number: s.id_number,
             position,
-            total_hours: Math.round(s.total_hours * 100) / 100,
-            normal_hours: Math.round(normalHours * 100) / 100,
-            sunday_hours: Math.round(sundayHours * 100) / 100,
-            public_holiday_hours: 0,
-            overtime_hours: Math.round(overtimeHours * 100) / 100,
-            total_wages: totalWages,
-            earnings_code: earningsCode,
-            earnings_desc: earningsDesc,
+            total_hours: Math.round(totalHours * 100) / 100,
+            normal_hours: Math.round(s.normal_hours * 100) / 100,
+            sunday_hours: Math.round(s.sunday_hours * 100) / 100,
+            public_holiday_hours: Math.round(s.ph_hours * 100) / 100,
+            overtime_hours: Math.round(s.overtime_hours * 100) / 100,
+            total_wages: Math.round(totalWages * 100) / 100,
+            earnings_code: "1000",
+            earnings_desc: "Normal",
           };
         });
 
@@ -230,20 +272,46 @@ export default function PayrollExportPage() {
     const rows: (string | number)[][] = [];
 
     for (const r of data) {
-      // Normal hours row
+      // 1000 = Normal hours
       if (r.normal_hours > 0) {
         rows.push([
           r.emp_code,
           r.surname,
           r.first_name,
           r.id_number,
-          r.earnings_code,
-          r.earnings_desc,
+          "1000",
+          "Normal",
           r.normal_hours,
-          r.total_wages,
+          Math.round(r.normal_hours * DEFAULT_HOURLY_RATE * 100) / 100,
         ]);
       }
-      // Overtime row
+      // 1001 = Sunday hours
+      if (r.sunday_hours > 0) {
+        rows.push([
+          r.emp_code,
+          r.surname,
+          r.first_name,
+          r.id_number,
+          "1001",
+          "Sunday",
+          r.sunday_hours,
+          Math.round(r.sunday_hours * DEFAULT_HOURLY_RATE * SUNDAY_MULTIPLIER * 100) / 100,
+        ]);
+      }
+      // 1002 = Public Holiday hours
+      if (r.public_holiday_hours > 0) {
+        rows.push([
+          r.emp_code,
+          r.surname,
+          r.first_name,
+          r.id_number,
+          "1002",
+          "Public Holiday",
+          r.public_holiday_hours,
+          Math.round(r.public_holiday_hours * DEFAULT_HOURLY_RATE * PH_MULTIPLIER * 100) / 100,
+        ]);
+      }
+      // 3000 = Overtime hours
       if (r.overtime_hours > 0) {
         rows.push([
           r.emp_code,
@@ -253,20 +321,7 @@ export default function PayrollExportPage() {
           "3000",
           "Overtime",
           r.overtime_hours,
-          0,
-        ]);
-      }
-      // Sunday row
-      if (r.sunday_hours > 0) {
-        rows.push([
-          r.emp_code,
-          r.surname,
-          r.first_name,
-          r.id_number,
-          "4000",
-          "Sunday",
-          r.sunday_hours,
-          0,
+          Math.round(r.overtime_hours * DEFAULT_HOURLY_RATE * 1.5 * 100) / 100,
         ]);
       }
     }
@@ -351,6 +406,7 @@ export default function PayrollExportPage() {
                     "Total Hours",
                     "Normal",
                     "Sunday",
+                    "PH",
                     "Overtime",
                     "Gross Wages",
                     "Earnings Code",
@@ -365,6 +421,7 @@ export default function PayrollExportPage() {
                           "First Name",
                           "ID Number",
                           "Position",
+                          "PH",
                           "Earnings Code",
                         ].includes(h)
                           ? "text-left"
@@ -407,6 +464,9 @@ export default function PayrollExportPage() {
                       {row.sunday_hours.toFixed(1)}
                     </td>
                     <td className="px-4 py-2 text-right font-mono text-base-900">
+                      {row.public_holiday_hours.toFixed(1)}
+                    </td>
+                    <td className="px-4 py-2 text-right font-mono text-base-900">
                       {row.overtime_hours.toFixed(1)}
                     </td>
                     <td className="px-4 py-2 text-right font-mono text-base-900">
@@ -434,6 +494,11 @@ export default function PayrollExportPage() {
                   <td className="px-4 py-2 text-right font-mono text-base-900">
                     {data
                       .reduce((s, r) => s + r.sunday_hours, 0)
+                      .toFixed(1)}
+                  </td>
+                  <td className="px-4 py-2 text-right font-mono text-base-900">
+                    {data
+                      .reduce((s, r) => s + r.public_holiday_hours, 0)
                       .toFixed(1)}
                   </td>
                   <td className="px-4 py-2 text-right font-mono text-base-900">

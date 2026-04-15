@@ -9,6 +9,7 @@ import { generateCSV, triggerDownload } from "@/lib/report-utils";
 import { TrendingUp, DollarSign, Receipt, CalendarDays } from "lucide-react";
 
 const LABOUR_TARGET = 25;
+const DEFAULT_HOURLY_RATE = 35; // R35/hr default for roster staff
 
 interface WagesRow {
   date: string;
@@ -29,6 +30,7 @@ export default function WagesVsTurnoverPage() {
       if (f.branchIds.length === 0) return;
       setLoading(true);
 
+      // Fetch cashups with driver wages
       const { data: cashups } = await supabase
         .from("daily_cashups")
         .select("*, cashup_driver_entries(wages)")
@@ -37,21 +39,42 @@ export default function WagesVsTurnoverPage() {
         .lte("date", f.dateTo)
         .order("date", { ascending: true });
 
+      // Fetch roster entries for FOH/BOH staff wages
+      const { data: rosterEntries } = await supabase
+        .from("roster_entries")
+        .select("date, shift_hours, is_off")
+        .in("branch_id", f.branchIds)
+        .gte("date", f.dateFrom)
+        .lte("date", f.dateTo)
+        .eq("is_off", false);
+
+      // Build roster wages by date
+      const rosterWagesByDate = new Map<string, number>();
+      if (rosterEntries) {
+        for (const re of rosterEntries as { date: string; shift_hours: number | null; is_off: boolean }[]) {
+          const hours = re.shift_hours ?? 0;
+          const existing = rosterWagesByDate.get(re.date) ?? 0;
+          rosterWagesByDate.set(re.date, existing + hours * DEFAULT_HOURLY_RATE);
+        }
+      }
+
       if (cashups) {
         const byDate = new Map<string, WagesRow>();
         for (const c of cashups as (Record<string, unknown> & { date: string; gross_turnover: number | null; cashup_driver_entries: { wages: number | null }[] })[]) {
           const turnover = c.gross_turnover ?? 0;
           const driverWages = (c.cashup_driver_entries ?? []).reduce((s, d) => s + (d.wages ?? 0), 0);
+          const rosterWages = rosterWagesByDate.get(c.date) ?? 0;
+          const totalWages = driverWages + rosterWages;
 
           const existing = byDate.get(c.date);
           if (existing) {
             existing.turnover += turnover;
-            existing.total_wages += driverWages;
+            existing.total_wages += totalWages;
             existing.labour_pct = existing.turnover > 0 ? (existing.total_wages / existing.turnover) * 100 : 0;
             existing.over_under = existing.labour_pct - LABOUR_TARGET;
           } else {
-            const pct = turnover > 0 ? (driverWages / turnover) * 100 : 0;
-            byDate.set(c.date, { date: c.date, turnover, total_wages: driverWages, labour_pct: pct, target_pct: LABOUR_TARGET, over_under: pct - LABOUR_TARGET });
+            const pct = turnover > 0 ? (totalWages / turnover) * 100 : 0;
+            byDate.set(c.date, { date: c.date, turnover, total_wages: totalWages, labour_pct: pct, target_pct: LABOUR_TARGET, over_under: pct - LABOUR_TARGET });
           }
         }
         setData(Array.from(byDate.values()));

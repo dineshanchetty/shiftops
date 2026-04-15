@@ -157,11 +157,18 @@ export function ShiftEditor({
   }
 
   async function handleSave() {
+    // Validate: no duplicate staff members on the same date
+    const activeEntries = rows.filter((r) => !r.toDelete && r.staffId);
+    const staffIds = activeEntries.map((r) => r.staffId);
+    const uniqueStaffIds = new Set(staffIds);
+    if (uniqueStaffIds.size < staffIds.length) {
+      alert("Cannot schedule the same staff member twice on the same date. Please select different staff members.");
+      return;
+    }
+
     setSaving(true);
     try {
-      const toSave = rows
-        .filter((r) => !r.toDelete && r.staffId)
-        .map((r) => ({
+      const toSave = activeEntries.map((r) => ({
           id: r.id,
           staffId: r.staffId,
           date,
@@ -299,6 +306,11 @@ export function ShiftEditor({
                         .filter((s) => {
                           if (s.active === false) return false;
                           if (row.positionFilter && s.position_id !== row.positionFilter) return false;
+                          // Exclude staff already selected in other rows (prevent duplicate staff on same date)
+                          const selectedStaffIds = rows
+                            .filter((r, i) => !r.toDelete && i !== actualIndex && r.staffId)
+                            .map((r) => r.staffId);
+                          if (selectedStaffIds.includes(s.id)) return false;
                           return true;
                         })
                         .map((s) => (
