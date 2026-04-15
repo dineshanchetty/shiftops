@@ -255,9 +255,9 @@ function buildThreeMonthForecast(
     return Math.max(2, Math.ceil(t / TURNOVER_PER_STAFF));
   }
 
-  // Generate next 90 days starting from tomorrow
-  const startDate = new Date();
-  startDate.setDate(startDate.getDate() + 1);
+  // Generate 3 full months starting from the 1st of NEXT month
+  const now = new Date();
+  const startDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
   const monthsMap = new Map<string, DailyForecast[]>();
 
@@ -849,9 +849,21 @@ export default function DashboardPage() {
             </CardHeader>
             <CardContent>
               {(() => {
-                const vals = data.predictive.last7DaysTurnover;
+                // For future days (no cashup yet), use the forecast from same-weekday avg
+                const vals = data.predictive.last7DaysTurnover.map((v) => {
+                  if (v.turnover > 0 || v.date <= today) return v;
+                  // Use day-of-week average from last28 data as forecast
+                  const dow = getDayOfWeek(v.date);
+                  const sameDow = data.predictive.last28DaysTurnover
+                    .filter((c) => getDayOfWeek(c.date) === dow && (c.gross_turnover ?? 0) > 0);
+                  const forecast = sameDow.length > 0
+                    ? sameDow.reduce((s, c) => s + (c.gross_turnover ?? 0), 0) / sameDow.length
+                    : 0;
+                  return { ...v, turnover: Math.round(forecast), isForecast: true };
+                });
                 const maxVal = Math.max(...vals.map((v) => v.turnover), 1);
-                const avgVal = vals.reduce((s, v) => s + v.turnover, 0) / vals.length;
+                const nonZeroVals = vals.filter((v) => v.turnover > 0);
+                const avgVal = nonZeroVals.length > 0 ? nonZeroVals.reduce((s, v) => s + v.turnover, 0) / nonZeroVals.length : 0;
                 const avgPct = maxVal > 0 ? (avgVal / maxVal) * 100 : 0;
 
                 return (
@@ -867,7 +879,9 @@ export default function DashboardPage() {
                     </div>
 
                     <div className="flex items-end gap-3 h-[220px] px-2">
-                      {vals.map(({ date, turnover }) => {
+                      {vals.map((item) => {
+                        const { date, turnover } = item;
+                        const isForecast = 'isForecast' in item && (item as { isForecast?: boolean }).isForecast;
                         const isToday = date === today;
                         const isFuture = date > today;
                         const heightPct = maxVal > 0 && turnover > 0 ? Math.max(8, (turnover / maxVal) * 100) : 0;
@@ -882,8 +896,8 @@ export default function DashboardPage() {
                                   className={`w-full rounded-t-lg transition-all duration-300 ${
                                     isToday
                                       ? 'bg-gradient-to-t from-orange-600 to-orange-400 shadow-lg shadow-orange-200'
-                                      : isFuture
-                                      ? 'bg-gray-200'
+                                      : isForecast
+                                      ? 'bg-gradient-to-t from-purple-400 to-purple-300 opacity-60 border border-dashed border-purple-400'
                                       : 'bg-gradient-to-t from-blue-600 to-blue-400 hover:from-blue-500 hover:to-blue-300'
                                   }`}
                                   style={{ height: `${heightPct}%` }}
@@ -894,13 +908,13 @@ export default function DashboardPage() {
                             </div>
                             <div className="text-center">
                               <span className={`text-[10px] font-semibold ${
-                                isToday ? 'text-orange-600' : 'text-gray-500'
+                                isToday ? 'text-orange-600' : isForecast ? 'text-purple-500' : 'text-gray-500'
                               }`}>
                                 {getDayName(date)}
                               </span>
                               {turnover > 0 && (
-                                <div className="text-[9px] font-mono text-gray-400 mt-0.5">
-                                  {formatCurrency(turnover)}
+                                <div className={`text-[9px] font-mono mt-0.5 ${isForecast ? 'text-purple-400' : 'text-gray-400'}`}>
+                                  {isForecast ? '~' : ''}{formatCurrency(turnover)}
                                 </div>
                               )}
                             </div>
