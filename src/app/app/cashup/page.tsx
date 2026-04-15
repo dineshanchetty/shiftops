@@ -229,26 +229,13 @@ export default function CashupPage() {
                     <th className="px-4 py-2 text-right hidden md:table-cell">
                       Cash Banked
                     </th>
-                    <th className="px-4 py-2 text-right hidden md:table-cell">
-                      Variance
-                    </th>
                     <th className="px-4 py-2">Status</th>
                     <th className="px-4 py-2 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {history.map((row, idx) => {
-                    const turnover = row.gross_turnover ?? 0;
-                    const discounts = row.discounts ?? 0;
-                    const delCharges = row.delivery_charges ?? 0;
-                    const creditCards = row.credit_cards ?? 0;
-                    const debtors = row.debtors ?? 0;
                     const cashBanked = row.cash_banked ?? 0;
-                    // Daily Banking = Turnover - Discounts + Del Charges - CC - Debtors
-                    // (Online payments not included in history — would need separate query)
-                    const dailyBanking =
-                      turnover - discounts + delCharges - creditCards - debtors;
-                    const variance = dailyBanking - cashBanked;
 
                     return (
                       <tr
@@ -269,13 +256,6 @@ export default function CashupPage() {
                           {row.cash_banked != null
                             ? formatCurrency(row.cash_banked)
                             : "-"}
-                        </td>
-                        <td className="px-4 py-2.5 text-right font-mono hidden md:table-cell">
-                          {variance === 0 ? (
-                            <span className="text-base-300">—</span>
-                          ) : (
-                            <span className="text-red-600">{formatCurrency(variance)}</span>
-                          )}
                         </td>
                         <td className="px-4 py-2.5">
                           <span
