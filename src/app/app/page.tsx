@@ -883,7 +883,6 @@ export default function DashboardPage() {
                         const { date, turnover } = item;
                         const isForecast = 'isForecast' in item && (item as { isForecast?: boolean }).isForecast;
                         const isToday = date === today;
-                        const isFuture = date > today;
                         const heightPct = maxVal > 0 && turnover > 0 ? Math.max(8, (turnover / maxVal) * 100) : 0;
                         return (
                           <div key={date} className="flex-1 flex flex-col items-center gap-1.5 group">
