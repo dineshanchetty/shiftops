@@ -288,6 +288,9 @@ export default function RosterPage() {
         onDateClick={(date) => setEditorDate(date)}
         loading={loading}
         workingDays={selectedBranchData?.working_days ?? undefined}
+        openingTime={selectedBranchData?.opening_time ? selectedBranchData.opening_time.slice(0, 5) : undefined}
+        closingTime={selectedBranchData?.closing_time ? selectedBranchData.closing_time.slice(0, 5) : undefined}
+        onEntryUpdated={loadEntries}
       />
 
       {/* Shift Editor slide-over */}

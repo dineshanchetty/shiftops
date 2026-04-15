@@ -14,6 +14,7 @@ import {
   TrendingUp,
   Users,
   Calendar,
+  Sparkles,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -50,6 +51,16 @@ interface BranchOverview {
   weekTurnover: number;
 }
 
+interface PredictiveData {
+  tomorrowForecast: number | null;
+  forecastConfidence: 'high' | 'medium' | 'low';
+  recommendedStaff: number | null;
+  scheduledTomorrowStaff: number;
+  last7DaysTurnover: { date: string; turnover: number }[];
+  weekTrend: number | null; // % change vs prior week
+  cashFlowAlertDates: string[];
+}
+
 interface DashboardData {
   totalBranches: number;
   todaysCashups: number;
@@ -60,6 +71,7 @@ interface DashboardData {
   upcomingRoster: { date: string; entries: RosterRow[] }[];
   recentCashups: CashupRow[];
   branchOverviews: BranchOverview[];
+  predictive: PredictiveData;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -102,6 +114,22 @@ function getWeekRange(): { start: string; end: string } {
     start: monday.toISOString().split('T')[0],
     end: sunday.toISOString().split('T')[0],
   };
+}
+
+function getNDaysAgo(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return d.toISOString().split('T')[0];
+}
+
+function getTomorrow(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().split('T')[0];
+}
+
+function getDayOfWeek(dateStr: string): number {
+  return new Date(dateStr + 'T00:00:00').getDay(); // 0=Sun … 6=Sat
 }
 
 function turnoverDelta(current: number, previous: number): number | undefined {
@@ -152,6 +180,11 @@ export default function DashboardPage() {
           getLastMonthRange();
         const { start: weekStart, end: weekEnd } = getWeekRange();
 
+        const tomorrow = getTomorrow();
+        const days28Ago = getNDaysAgo(28);
+        const days7Ago = getNDaysAgo(7);
+        const days14Ago = getNDaysAgo(14);
+
         // Run all queries in parallel
         const [
           branchesRes,
@@ -163,6 +196,12 @@ export default function DashboardPage() {
           weekCashupsRes,
           todayAllCashupsRes,
           upcomingRosterRes,
+          // Predictive queries
+          last28CashupsRes,
+          tomorrowRosterRes,
+          last7CashupsRes,
+          priorWeekCashupsRes,
+          thisWeekCashupsForAlertRes,
         ] = await Promise.all([
           // 1. Branches
           supabase
@@ -240,6 +279,46 @@ export default function DashboardPage() {
             .lte('date', new Date(Date.now() + 3 * 86400000).toISOString().split('T')[0])
             .order('date')
             .order('shift_start'),
+
+          // 10. Last 28 days cashups for same-weekday forecasting
+          supabase
+            .from('daily_cashups')
+            .select('date, gross_turnover, cash_banked, discounts, delivery_charges, credit_cards, debtors')
+            .eq('tenant_id', tenantId)
+            .gte('date', days28Ago)
+            .order('date'),
+
+          // 11. Tomorrow's roster count
+          supabase
+            .from('roster_entries')
+            .select('id, shift_hours')
+            .eq('tenant_id', tenantId)
+            .eq('date', tomorrow)
+            .eq('is_off', false),
+
+          // 12. Last 7 days cashups for sparkline
+          supabase
+            .from('daily_cashups')
+            .select('date, gross_turnover')
+            .eq('tenant_id', tenantId)
+            .gte('date', days7Ago)
+            .order('date'),
+
+          // 13. Prior 7 days (8-14 days ago) for trend comparison
+          supabase
+            .from('daily_cashups')
+            .select('gross_turnover')
+            .eq('tenant_id', tenantId)
+            .gte('date', days14Ago)
+            .lt('date', days7Ago),
+
+          // 14. This week's cashups (all) for banking variance alert
+          supabase
+            .from('daily_cashups')
+            .select('date, gross_turnover, discounts, delivery_charges, credit_cards, debtors, cash_banked')
+            .eq('tenant_id', tenantId)
+            .gte('date', weekStart)
+            .lte('date', weekEnd),
         ]);
 
         // ─── Process data ───────────────────────────────────────────────
@@ -342,6 +421,96 @@ export default function DashboardPage() {
           .map(([date, entries]) => ({ date, entries }))
           .sort((a, b) => a.date.localeCompare(b.date));
 
+        // ─── Predictive calculations ────────────────────────────────────
+
+        // Tomorrow's forecast: average same weekday over last 4 occurrences
+        const tomorrowDow = getDayOfWeek(tomorrow);
+        const last28 = (last28CashupsRes.data ?? []) as { date: string; gross_turnover: number | null }[];
+        const sameDowEntries = last28
+          .filter((c) => getDayOfWeek(c.date) === tomorrowDow && c.gross_turnover != null)
+          .map((c) => c.gross_turnover as number);
+
+        let tomorrowForecast: number | null = null;
+        let forecastConfidence: 'high' | 'medium' | 'low' = 'low';
+        if (sameDowEntries.length > 0) {
+          tomorrowForecast = sameDowEntries.reduce((a, b) => a + b, 0) / sameDowEntries.length;
+          forecastConfidence = sameDowEntries.length >= 4 ? 'high' : sameDowEntries.length >= 2 ? 'medium' : 'low';
+        }
+
+        // Staffing recommendation: predicted_turnover / avg_turnover_per_staff_hour / avg_shift_hours
+        const tomorrowRosterEntries = (tomorrowRosterRes.data ?? []) as { id: string; shift_hours: number | null }[];
+        const scheduledTomorrowStaff = tomorrowRosterEntries.length;
+
+        let recommendedStaff: number | null = null;
+        if (tomorrowForecast !== null && last28.length > 0) {
+          // Compute avg staff per day from last 28 days roster data — simplified: use turnover per staff ratio
+          // Use historical ratio: total turnover / total scheduled staff across last 28 days
+          const avgTurnoverPerDay = last28
+            .filter((c) => c.gross_turnover != null && c.gross_turnover > 0)
+            .reduce((sum, c) => sum + (c.gross_turnover ?? 0), 0) / Math.max(1, last28.filter((c) => (c.gross_turnover ?? 0) > 0).length);
+
+          // Simple ratio: staff recommended = (predicted / avg_turnover_per_day) * approx_historic_staff
+          const approxHistoricStaff = Math.max(1, scheduledTomorrowStaff || 4);
+          const ratio = approxHistoricStaff / Math.max(1, avgTurnoverPerDay);
+          recommendedStaff = Math.max(1, Math.round(tomorrowForecast * ratio));
+        }
+
+        // Last 7 days turnover sparkline
+        const last7Raw = (last7CashupsRes.data ?? []) as { date: string; gross_turnover: number | null }[];
+        // Build a map keyed by date
+        const last7Map = new Map<string, number>();
+        last7Raw.forEach((c) => { if (c.gross_turnover != null) last7Map.set(c.date, c.gross_turnover); });
+
+        // Fill all 7 days (even those with no data)
+        const last7DaysTurnover: { date: string; turnover: number }[] = [];
+        for (let i = 6; i >= 0; i--) {
+          const d = new Date();
+          d.setDate(d.getDate() - i);
+          const ds = d.toISOString().split('T')[0];
+          last7DaysTurnover.push({ date: ds, turnover: last7Map.get(ds) ?? 0 });
+        }
+
+        // Week trend: this week vs prior week
+        const thisWeekTotal = last7Raw.reduce((sum, c) => sum + (c.gross_turnover ?? 0), 0);
+        const priorWeekTotal = ((priorWeekCashupsRes.data ?? []) as { gross_turnover: number | null }[])
+          .reduce((sum, c) => sum + (c.gross_turnover ?? 0), 0);
+        const weekTrend = priorWeekTotal > 0
+          ? Math.round(((thisWeekTotal - priorWeekTotal) / priorWeekTotal) * 100)
+          : null;
+
+        // Cash flow alert: banking variance > R50 this week
+        const thisWeekForAlert = (thisWeekCashupsForAlertRes.data ?? []) as {
+          date: string;
+          gross_turnover: number | null;
+          discounts: number | null;
+          delivery_charges: number | null;
+          credit_cards: number | null;
+          debtors: number | null;
+          cash_banked: number | null;
+        }[];
+        const cashFlowAlertDates = thisWeekForAlert
+          .filter((c) => {
+            if (c.cash_banked == null || c.gross_turnover == null) return false;
+            const expectedBanking =
+              (c.gross_turnover ?? 0) -
+              (c.discounts ?? 0) +
+              (c.delivery_charges ?? 0) -
+              (c.credit_cards ?? 0) -
+              (c.debtors ?? 0);
+            return Math.abs(expectedBanking - (c.cash_banked ?? 0)) > 50;
+          })
+          .map((c) => c.date);
+
+        const predictive: PredictiveData = {
+          tomorrowForecast,
+          forecastConfidence,
+          recommendedStaff,
+          scheduledTomorrowStaff,
+          last7DaysTurnover,
+          weekTrend,
+          cashFlowAlertDates,
+        };
+
         setData({
           totalBranches,
           todaysCashups,
@@ -352,6 +521,7 @@ export default function DashboardPage() {
           upcomingRoster,
           recentCashups,
           branchOverviews,
+          predictive,
         });
       } catch (err) {
         console.error('Dashboard fetch error:', err);
@@ -666,6 +836,189 @@ export default function DashboardPage() {
                 ))}
               </div>
             )}
+          </CardContent>
+        </Card>
+
+        {/* ── Predictions & Insights ─────────────────────────────────── */}
+        <Card className="hover:translate-y-0 hover:shadow-sm">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Sparkles size={18} className="text-accent" />
+              Predictions &amp; Insights
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+
+              {/* 1. Tomorrow's Forecast */}
+              <div className="rounded-lg border border-gray-100 bg-gray-50/50 p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-base-400">
+                    Tomorrow&apos;s Forecast
+                  </span>
+                  <Badge
+                    variant={
+                      data.predictive.forecastConfidence === 'high'
+                        ? 'success'
+                        : data.predictive.forecastConfidence === 'medium'
+                          ? 'warning'
+                          : 'default'
+                    }
+                  >
+                    {data.predictive.forecastConfidence === 'high'
+                      ? 'High confidence'
+                      : data.predictive.forecastConfidence === 'medium'
+                        ? 'Medium confidence'
+                        : 'Low confidence'}
+                  </Badge>
+                </div>
+                {data.predictive.tomorrowForecast != null ? (
+                  <p className="text-2xl font-bold font-mono text-base-900">
+                    {formatCurrency(Math.round(data.predictive.tomorrowForecast))}
+                  </p>
+                ) : (
+                  <p className="text-sm text-base-400">Not enough historical data</p>
+                )}
+                <p className="text-xs text-base-400 mt-1">
+                  Expected turnover — based on same-weekday avg (last 4 weeks)
+                </p>
+              </div>
+
+              {/* 2. Staffing Recommendation */}
+              <div className="rounded-lg border border-gray-100 bg-gray-50/50 p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-base-400">
+                    Staffing Recommendation
+                  </span>
+                  {data.predictive.recommendedStaff != null && (
+                    <Badge
+                      variant={
+                        data.predictive.scheduledTomorrowStaff >= data.predictive.recommendedStaff
+                          ? 'success'
+                          : 'warning'
+                      }
+                    >
+                      {data.predictive.scheduledTomorrowStaff >= data.predictive.recommendedStaff
+                        ? 'Sufficient'
+                        : 'Understaffed'}
+                    </Badge>
+                  )}
+                </div>
+                {data.predictive.recommendedStaff != null ? (
+                  <div className="flex items-end gap-4">
+                    <div>
+                      <p className="text-2xl font-bold text-base-900">
+                        {data.predictive.recommendedStaff}
+                      </p>
+                      <p className="text-xs text-base-400">Recommended</p>
+                    </div>
+                    <div className="text-base-300 text-xl font-light mb-1">vs</div>
+                    <div>
+                      <p className={`text-2xl font-bold ${
+                        data.predictive.scheduledTomorrowStaff >= data.predictive.recommendedStaff
+                          ? 'text-green-600'
+                          : 'text-amber-500'
+                      }`}>
+                        {data.predictive.scheduledTomorrowStaff}
+                      </p>
+                      <p className="text-xs text-base-400">Scheduled</p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-base-400">
+                    {data.predictive.scheduledTomorrowStaff} staff scheduled tomorrow
+                  </p>
+                )}
+              </div>
+
+              {/* 3. Weekly Trend Sparkline */}
+              <div className="rounded-lg border border-gray-100 bg-gray-50/50 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-base-400">
+                    7-Day Turnover Trend
+                  </span>
+                  {data.predictive.weekTrend != null && (
+                    <span className={`text-sm font-semibold ${
+                      data.predictive.weekTrend >= 0 ? 'text-green-600' : 'text-red-500'
+                    }`}>
+                      {data.predictive.weekTrend >= 0 ? '↑' : '↓'} {Math.abs(data.predictive.weekTrend)}% vs prev week
+                    </span>
+                  )}
+                </div>
+                {/* CSS Sparkline */}
+                {(() => {
+                  const vals = data.predictive.last7DaysTurnover;
+                  const maxVal = Math.max(...vals.map((v) => v.turnover), 1);
+                  const isUp = (data.predictive.weekTrend ?? 0) >= 0;
+                  return (
+                    <div className="flex items-end gap-1 h-14">
+                      {vals.map(({ date, turnover }) => {
+                        const heightPct = maxVal > 0 ? Math.max(4, (turnover / maxVal) * 100) : 4;
+                        return (
+                          <div
+                            key={date}
+                            className="flex-1 flex flex-col items-center gap-1 group relative"
+                          >
+                            <div
+                              className={`w-full rounded-sm transition-all ${isUp ? 'bg-green-400' : 'bg-red-400'}`}
+                              style={{ height: `${heightPct}%` }}
+                            />
+                            {/* Tooltip on hover */}
+                            <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-[9px] font-mono px-1.5 py-0.5 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-10 pointer-events-none">
+                              {date.slice(5)}: {turnover > 0 ? formatCurrency(turnover) : '—'}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+                <div className="flex justify-between mt-1">
+                  <span className="text-[10px] text-base-300">
+                    {data.predictive.last7DaysTurnover[0]?.date.slice(5) ?? ''}
+                  </span>
+                  <span className="text-[10px] text-base-300">
+                    {data.predictive.last7DaysTurnover[6]?.date.slice(5) ?? ''}
+                  </span>
+                </div>
+              </div>
+
+              {/* 4. Cash Flow Alert */}
+              <div className="rounded-lg border border-gray-100 bg-gray-50/50 p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-base-400">
+                    Cash Flow Alert
+                  </span>
+                  <Badge
+                    variant={data.predictive.cashFlowAlertDates.length > 0 ? 'danger' : 'success'}
+                  >
+                    {data.predictive.cashFlowAlertDates.length > 0 ? 'Issues found' : 'All clear'}
+                  </Badge>
+                </div>
+                {data.predictive.cashFlowAlertDates.length === 0 ? (
+                  <p className="text-sm text-green-600 font-medium">
+                    No banking variances &gt; R50 this week
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-sm text-red-600 font-medium mb-2">
+                      {data.predictive.cashFlowAlertDates.length} day{data.predictive.cashFlowAlertDates.length > 1 ? 's' : ''} with banking variance &gt; R50
+                    </p>
+                    <div className="flex flex-wrap gap-1">
+                      {data.predictive.cashFlowAlertDates.map((d) => (
+                        <span key={d} className="text-[11px] font-mono bg-red-100 text-red-700 rounded px-1.5 py-0.5">
+                          {formatDate(d)}
+                        </span>
+                      ))}
+                    </div>
+                  </>
+                )}
+                <p className="text-xs text-base-400 mt-2">
+                  Based on this week&apos;s cashups: expected banking vs cash banked
+                </p>
+              </div>
+
+            </div>
           </CardContent>
         </Card>
       </div>
