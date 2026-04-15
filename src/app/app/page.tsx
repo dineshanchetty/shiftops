@@ -15,6 +15,8 @@ import {
   Users,
   Calendar,
   Sparkles,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -57,6 +59,7 @@ interface PredictiveData {
   recommendedStaff: number | null;
   scheduledTomorrowStaff: number;
   last7DaysTurnover: { date: string; turnover: number }[];
+  last28DaysTurnover: { date: string; gross_turnover: number | null }[];
   weekTrend: number | null; // % change vs prior week
   cashFlowAlertDates: string[];
 }
@@ -137,6 +140,203 @@ function turnoverDelta(current: number, previous: number): number | undefined {
   return Math.round(((current - previous) / previous) * 100);
 }
 
+// ─── 3-Month Forecast helpers ─────────────────────────────────────────────────
+
+// SA Public Holidays 2026 (YYYY-MM-DD)
+const SA_PUBLIC_HOLIDAYS_2026: Set<string> = new Set([
+  '2026-01-01', // New Year's Day
+  '2026-03-21', // Human Rights Day
+  '2026-04-03', // Good Friday
+  '2026-04-06', // Family Day
+  '2026-04-27', // Freedom Day
+  '2026-05-01', // Workers' Day
+  '2026-06-16', // Youth Day
+  '2026-08-09', // Women's Day
+  '2026-08-10', // Women's Day observed
+  '2026-09-24', // Heritage Day
+  '2026-12-16', // Day of Reconciliation
+  '2026-12-25', // Christmas Day
+  '2026-12-26', // Day of Goodwill
+]);
+
+interface DailyForecast {
+  date: string;          // YYYY-MM-DD
+  dayOfWeek: number;     // 0=Sun … 6=Sat
+  projectedTurnover: number;
+  isPublicHoliday: boolean;
+  holidayName?: string;
+  recommendedStaff: number;
+  isBusy: boolean;       // Fri=5 or Sat=6
+}
+
+interface WeekForecast {
+  weekStart: string;
+  days: DailyForecast[];
+  weeklyTotal: number;
+  avgStaff: number;
+}
+
+interface MonthForecast {
+  monthKey: string;      // e.g. "2026-05"
+  monthLabel: string;    // e.g. "May 2026"
+  projectedTotal: number;
+  avgPerDay: number;
+  avgStaff: number;
+  vsCurrentMonthPct: number | null;
+  weeks: WeekForecast[];
+}
+
+const HOLIDAY_NAMES_2026: Record<string, string> = {
+  '2026-01-01': "New Year's Day",
+  '2026-03-21': 'Human Rights Day',
+  '2026-04-03': 'Good Friday',
+  '2026-04-06': 'Family Day',
+  '2026-04-27': 'Freedom Day',
+  '2026-05-01': "Workers' Day",
+  '2026-06-16': 'Youth Day',
+  '2026-08-09': "Women's Day",
+  '2026-08-10': "Women's Day (observed)",
+  '2026-09-24': 'Heritage Day',
+  '2026-12-16': 'Day of Reconciliation',
+  '2026-12-25': 'Christmas Day',
+  '2026-12-26': 'Day of Goodwill',
+};
+
+function buildThreeMonthForecast(
+  last28: { date: string; gross_turnover: number | null }[],
+  currentMonthTurnover: number,
+): MonthForecast[] {
+  // Filter to days with actual turnover data
+  const validDays = last28.filter((c) => c.gross_turnover != null && c.gross_turnover > 0);
+
+  // Build day-of-week averages from last 28 days
+  const dowSums: number[] = [0, 0, 0, 0, 0, 0, 0];
+  const dowCounts: number[] = [0, 0, 0, 0, 0, 0, 0];
+  validDays.forEach((c) => {
+    const dow = getDayOfWeek(c.date);
+    dowSums[dow] += c.gross_turnover!;
+    dowCounts[dow] += 1;
+  });
+  const dowAvg: number[] = dowSums.map((s, i) => (dowCounts[i] > 0 ? s / dowCounts[i] : 0));
+
+  // Fallback: if any dow has no data, use overall average
+  const overallAvg =
+    validDays.length > 0
+      ? validDays.reduce((s, c) => s + (c.gross_turnover ?? 0), 0) / validDays.length
+      : 0;
+  const filledDowAvg = dowAvg.map((v) => (v > 0 ? v : overallAvg));
+
+  // Compute growth trend from last 28 days
+  // Compare first 14 days vs last 14 days
+  const sorted = [...validDays].sort((a, b) => a.date.localeCompare(b.date));
+  let growthFactor = 1;
+  if (sorted.length >= 4) {
+    const half = Math.floor(sorted.length / 2);
+    const firstHalf = sorted.slice(0, half);
+    const secondHalf = sorted.slice(half);
+    const firstAvg = firstHalf.reduce((s, c) => s + (c.gross_turnover ?? 0), 0) / firstHalf.length;
+    const secondAvg = secondHalf.reduce((s, c) => s + (c.gross_turnover ?? 0), 0) / secondHalf.length;
+    if (firstAvg > 0) {
+      // Trend per day; extrapolate over ~90 days — cap growth to ±30%
+      const rawGrowth = (secondAvg - firstAvg) / firstAvg;
+      growthFactor = Math.max(0.7, Math.min(1.3, 1 + rawGrowth));
+    }
+  }
+
+  // Staffing ratio: historical avg staff per day derived from avgTurnoverPerDay
+  // We'll use: staff = ceil(projectedTurnover / (overallAvg / referenceStaff))
+  // Without roster data per day, we use a sensible default ratio: 1 staff per R8,000 turnover, min 2
+  const TURNOVER_PER_STAFF = overallAvg > 0 ? overallAvg / 5 : 8000; // 5 = default staff count
+
+  function staffForTurnover(t: number): number {
+    return Math.max(2, Math.ceil(t / TURNOVER_PER_STAFF));
+  }
+
+  // Generate next 90 days starting from tomorrow
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() + 1);
+
+  // Group into 3 calendar months
+  const monthsMap = new Map<string, DailyForecast[]>();
+
+  for (let i = 0; i < 90; i++) {
+    const d = new Date(startDate);
+    d.setDate(startDate.getDate() + i);
+    const dateStr = d.toISOString().split('T')[0];
+    const monthKey = dateStr.slice(0, 7); // "YYYY-MM"
+    const dow = d.getDay(); // 0=Sun … 6=Sat
+
+    const isPublicHoliday = SA_PUBLIC_HOLIDAYS_2026.has(dateStr);
+    const baseTurnover = filledDowAvg[dow] * growthFactor;
+    const projectedTurnover = isPublicHoliday ? baseTurnover * 0.7 : baseTurnover;
+    const recommendedStaff = staffForTurnover(projectedTurnover);
+    const isBusy = dow === 5 || dow === 6; // Fri or Sat
+
+    const day: DailyForecast = {
+      date: dateStr,
+      dayOfWeek: dow,
+      projectedTurnover: Math.round(projectedTurnover),
+      isPublicHoliday,
+      holidayName: isPublicHoliday ? HOLIDAY_NAMES_2026[dateStr] : undefined,
+      recommendedStaff,
+      isBusy,
+    };
+
+    if (!monthsMap.has(monthKey)) monthsMap.set(monthKey, []);
+    monthsMap.get(monthKey)!.push(day);
+  }
+
+  // Only take the first 3 months
+  const monthKeys = Array.from(monthsMap.keys()).slice(0, 3);
+
+  const MONTH_NAMES = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
+
+  return monthKeys.map((monthKey) => {
+    const days = monthsMap.get(monthKey)!;
+    const projectedTotal = days.reduce((s, d) => s + d.projectedTurnover, 0);
+    const avgPerDay = days.length > 0 ? projectedTotal / days.length : 0;
+    const avgStaff = days.length > 0
+      ? Math.round(days.reduce((s, d) => s + d.recommendedStaff, 0) / days.length)
+      : 0;
+
+    const [year, month] = monthKey.split('-').map(Number);
+    const monthLabel = `${MONTH_NAMES[month - 1]} ${year}`;
+
+    const vsCurrentMonthPct =
+      currentMonthTurnover > 0
+        ? Math.round(((projectedTotal - currentMonthTurnover) / currentMonthTurnover) * 100)
+        : null;
+
+    // Group days into ISO weeks (Mon-Sun)
+    const weeksMap = new Map<string, DailyForecast[]>();
+    days.forEach((day) => {
+      // Find Monday of that week
+      const d = new Date(day.date + 'T00:00:00');
+      const dow = d.getDay();
+      const diff = dow === 0 ? 6 : dow - 1;
+      const monday = new Date(d);
+      monday.setDate(d.getDate() - diff);
+      const weekKey = monday.toISOString().split('T')[0];
+      if (!weeksMap.has(weekKey)) weeksMap.set(weekKey, []);
+      weeksMap.get(weekKey)!.push(day);
+    });
+
+    const weeks: WeekForecast[] = Array.from(weeksMap.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([weekStart, wDays]) => ({
+        weekStart,
+        days: wDays,
+        weeklyTotal: wDays.reduce((s, d) => s + d.projectedTurnover, 0),
+        avgStaff: Math.round(wDays.reduce((s, d) => s + d.recommendedStaff, 0) / wDays.length),
+      }));
+
+    return { monthKey, monthLabel, projectedTotal, avgPerDay, avgStaff, vsCurrentMonthPct, weeks };
+  });
+}
+
 // ─── Skeleton ─────────────────────────────────────────────────────────────────
 
 function SkeletonBlock({ className }: { className?: string }) {
@@ -153,6 +353,7 @@ export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [openMonths, setOpenMonths] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     async function fetchDashboard() {
@@ -507,6 +708,7 @@ export default function DashboardPage() {
           recommendedStaff,
           scheduledTomorrowStaff,
           last7DaysTurnover,
+          last28DaysTurnover: last28,
           weekTrend,
           cashFlowAlertDates,
         };
@@ -573,6 +775,21 @@ export default function DashboardPage() {
 
   const delta = turnoverDelta(data.monthlyTurnover, data.lastMonthTurnover);
   const today = getToday();
+
+  // ─── 3-Month Forecast (derived client-side from 28-day data) ───────────────
+  const threeMonthForecast = buildThreeMonthForecast(
+    data.predictive.last28DaysTurnover,
+    data.monthlyTurnover,
+  );
+
+  function toggleMonth(key: string) {
+    setOpenMonths((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   return (
     <PageShell title="Dashboard" subtitle="Overview of your franchise operations">
@@ -1019,6 +1236,194 @@ export default function DashboardPage() {
               </div>
 
             </div>
+          </CardContent>
+        </Card>
+
+        {/* ── 3-Month Forecast ───────────────────────────────────────── */}
+        <Card className="hover:translate-y-0 hover:shadow-sm">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Sparkles size={18} className="text-accent" />
+              3-Month Forecast
+            </CardTitle>
+            <p className="text-xs text-base-400 mt-1">
+              Projected revenue &amp; staffing — based on last 28 days of cashup data with trend adjustment
+            </p>
+          </CardHeader>
+          <CardContent>
+            {threeMonthForecast.length === 0 ? (
+              <p className="text-sm text-base-400 py-4 text-center">
+                Not enough historical data to generate a forecast
+              </p>
+            ) : (
+              <div className="space-y-6">
+                {/* Monthly summary cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {threeMonthForecast.map((month) => {
+                    const isUp = month.vsCurrentMonthPct != null && month.vsCurrentMonthPct >= 0;
+                    return (
+                      <div
+                        key={month.monthKey}
+                        className="rounded-xl border border-gray-100 bg-gray-50/50 p-5"
+                      >
+                        <p className="text-xs font-bold uppercase tracking-widest text-base-400 mb-2">
+                          {month.monthLabel}
+                        </p>
+                        <p className="text-2xl font-bold font-mono text-base-900">
+                          {formatCurrency(Math.round(month.projectedTotal))}
+                        </p>
+                        {month.vsCurrentMonthPct != null && (
+                          <p className={`text-sm font-semibold mt-1 ${isUp ? 'text-green-600' : 'text-amber-500'}`}>
+                            {isUp ? '↑' : '↓'} {Math.abs(month.vsCurrentMonthPct)}% vs current month
+                          </p>
+                        )}
+                        <div className="mt-3 pt-3 border-t border-gray-100 grid grid-cols-2 gap-2 text-xs text-base-500">
+                          <div>
+                            <span className="block text-base-400 uppercase tracking-wide mb-0.5">Avg/day</span>
+                            <span className="font-mono font-semibold text-base-700">
+                              {formatCurrency(Math.round(month.avgPerDay))}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="block text-base-400 uppercase tracking-wide mb-0.5">Staff/day</span>
+                            <span className="font-semibold text-base-700">{month.avgStaff}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Weekly breakdown per month (collapsible) */}
+                <div className="space-y-3">
+                  {threeMonthForecast.map((month) => {
+                    const isOpen = openMonths.has(month.monthKey);
+                    return (
+                      <div key={month.monthKey} className="rounded-xl border border-gray-100 overflow-hidden">
+                        {/* Month toggle header */}
+                        <button
+                          onClick={() => toggleMonth(month.monthKey)}
+                          className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors text-left"
+                        >
+                          <span className="font-semibold text-sm text-base-800">
+                            {month.monthLabel} — Weekly Breakdown
+                          </span>
+                          <span className="text-base-400">
+                            {isOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                          </span>
+                        </button>
+
+                        {isOpen && (
+                          <div className="p-4 overflow-x-auto">
+                            <table className="w-full text-xs min-w-[680px]">
+                              <thead>
+                                <tr className="border-b border-gray-100">
+                                  <th className="text-left py-2 pr-3 font-semibold text-base-400 uppercase tracking-wide whitespace-nowrap">
+                                    Week of
+                                  </th>
+                                  {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => (
+                                    <th
+                                      key={d}
+                                      className={`text-right py-2 px-2 font-semibold uppercase tracking-wide whitespace-nowrap ${
+                                        d === 'Fri' || d === 'Sat'
+                                          ? 'text-amber-600'
+                                          : 'text-base-400'
+                                      }`}
+                                    >
+                                      {d}
+                                    </th>
+                                  ))}
+                                  <th className="text-right py-2 pl-3 font-semibold text-base-400 uppercase tracking-wide whitespace-nowrap">
+                                    Weekly Total
+                                  </th>
+                                  <th className="text-right py-2 pl-3 font-semibold text-base-400 uppercase tracking-wide whitespace-nowrap">
+                                    Staff
+                                  </th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {month.weeks.map((week) => {
+                                  // Build Mon=1…Sun=0 ordered map
+                                  const dayMap = new Map<number, DailyForecast>();
+                                  week.days.forEach((d) => dayMap.set(d.dayOfWeek, d));
+                                  // Mon=1,Tue=2,…,Sat=6,Sun=0
+                                  const orderedDow = [1, 2, 3, 4, 5, 6, 0];
+
+                                  return (
+                                    <tr
+                                      key={week.weekStart}
+                                      className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50"
+                                    >
+                                      <td className="py-2.5 pr-3 text-base-500 font-medium whitespace-nowrap">
+                                        {week.weekStart.slice(5).replace('-', '/')}
+                                      </td>
+                                      {orderedDow.map((dow) => {
+                                        const day = dayMap.get(dow);
+                                        const isBusy = dow === 5 || dow === 6;
+                                        if (!day) {
+                                          return (
+                                            <td key={dow} className="text-right py-2.5 px-2 text-base-200">
+                                              —
+                                            </td>
+                                          );
+                                        }
+                                        return (
+                                          <td
+                                            key={dow}
+                                            className={`text-right py-2.5 px-2 font-mono whitespace-nowrap ${
+                                              day.isPublicHoliday
+                                                ? 'text-blue-600 bg-blue-50/60'
+                                                : isBusy
+                                                  ? 'text-amber-700 font-semibold'
+                                                  : 'text-base-700'
+                                            }`}
+                                            title={day.isPublicHoliday ? day.holidayName : undefined}
+                                          >
+                                            {formatCurrency(day.projectedTurnover)}
+                                            {day.isPublicHoliday && (
+                                              <span className="ml-0.5 text-blue-400">*</span>
+                                            )}
+                                          </td>
+                                        );
+                                      })}
+                                      <td className="text-right py-2.5 pl-3 font-mono font-semibold text-base-900 whitespace-nowrap">
+                                        {formatCurrency(week.weeklyTotal)}
+                                      </td>
+                                      <td className="text-right py-2.5 pl-3 text-base-500 whitespace-nowrap">
+                                        ~{week.avgStaff}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+
+                            {/* Legend */}
+                            <div className="mt-3 flex flex-wrap gap-4 text-[10px] text-base-400">
+                              <span>
+                                <span className="inline-block w-2 h-2 rounded-sm bg-amber-400 mr-1" />
+                                Fri/Sat — busy days
+                              </span>
+                              <span>
+                                <span className="text-blue-400 font-bold mr-1">*</span>
+                                Public holiday (70% of normal)
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Staffing note */}
+                <p className="text-[11px] text-base-400 border-t border-gray-100 pt-3">
+                  Staffing estimates are derived from your historical turnover-to-staff ratio. Public holidays are
+                  flagged in blue and forecast at 70% of normal turnover. Fri/Sat shown in amber as typically
+                  busier days. Forecasts do not account for seasonal promotions or extraordinary events.
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
