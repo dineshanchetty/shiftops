@@ -777,22 +777,26 @@ export default function DashboardPage() {
           label="Total Branches"
           value={data.totalBranches}
           icon={<Building2 size={20} />}
+          className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-100"
         />
         <StatCard
           label="Today's Cashups"
           value={`${data.todaysCashups} of ${data.totalBranches}`}
           icon={<Receipt size={20} />}
+          className="bg-gradient-to-br from-green-50 to-emerald-50 border border-green-100"
         />
         <StatCard
           label="Missing Cashups"
           value={data.missingCashups}
           icon={<AlertTriangle size={20} />}
+          className={data.missingCashups > 0 ? "bg-gradient-to-br from-red-50 to-orange-50 border border-red-100" : "bg-gradient-to-br from-gray-50 to-slate-50 border border-gray-100"}
         />
         <StatCard
           label="Monthly Turnover"
           value={formatCurrency(data.monthlyTurnover)}
           delta={delta}
           icon={<TrendingUp size={20} />}
+          className="bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-100"
         />
       </div>
 
@@ -862,24 +866,44 @@ export default function DashboardPage() {
                       </span>
                     </div>
 
-                    <div className="flex items-end gap-2 h-[200px]">
+                    <div className="flex items-end gap-3 h-[220px] px-2">
                       {vals.map(({ date, turnover }) => {
                         const isToday = date === today;
-                        const heightPct = maxVal > 0 ? Math.max(4, (turnover / maxVal) * 100) : 4;
+                        const isFuture = date > today;
+                        const heightPct = maxVal > 0 && turnover > 0 ? Math.max(8, (turnover / maxVal) * 100) : 0;
                         return (
-                          <div key={date} className="flex-1 flex flex-col items-center gap-1">
-                            <span className="text-[10px] font-mono text-gray-500 truncate w-full text-center">
+                          <div key={date} className="flex-1 flex flex-col items-center gap-1.5 group">
+                            <span className="text-[10px] font-mono text-gray-500 truncate w-full text-center opacity-0 group-hover:opacity-100 transition-opacity">
                               {turnover > 0 ? formatCurrency(turnover) : '—'}
                             </span>
-                            <div
-                              className={`w-full rounded-t-md transition-all ${
-                                isToday ? 'bg-accent' : 'bg-accent/40'
-                              }`}
-                              style={{ height: `${heightPct}%` }}
-                            />
-                            <span className={`text-[10px] font-medium ${isToday ? 'text-accent' : 'text-gray-400'}`}>
-                              {getDayName(date)}
-                            </span>
+                            <div className="w-full relative flex items-end" style={{ height: '180px' }}>
+                              {turnover > 0 ? (
+                                <div
+                                  className={`w-full rounded-t-lg transition-all duration-300 ${
+                                    isToday
+                                      ? 'bg-gradient-to-t from-orange-600 to-orange-400 shadow-lg shadow-orange-200'
+                                      : isFuture
+                                      ? 'bg-gray-200'
+                                      : 'bg-gradient-to-t from-blue-600 to-blue-400 hover:from-blue-500 hover:to-blue-300'
+                                  }`}
+                                  style={{ height: `${heightPct}%` }}
+                                />
+                              ) : (
+                                <div className="w-full h-1 rounded bg-gray-200" />
+                              )}
+                            </div>
+                            <div className="text-center">
+                              <span className={`text-[10px] font-semibold ${
+                                isToday ? 'text-orange-600' : 'text-gray-500'
+                              }`}>
+                                {getDayName(date)}
+                              </span>
+                              {turnover > 0 && (
+                                <div className="text-[9px] font-mono text-gray-400 mt-0.5">
+                                  {formatCurrency(turnover)}
+                                </div>
+                              )}
+                            </div>
                           </div>
                         );
                       })}
