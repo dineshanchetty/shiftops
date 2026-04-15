@@ -74,12 +74,14 @@ export default function CashupPage() {
     });
   }, [branchesLoaded]);
 
-  // ─── Auto-load cashup history when branch changes ──────────────────
+  // ─── Auto-load cashup history when branch changes or returning from form ──
   useEffect(() => {
     if (!branchId) {
       setHistory([]);
       return;
     }
+    // Refresh history when branch changes OR when returning from form (loaded becomes false)
+    if (loaded) return;
     let cancelled = false;
     setHistoryLoading(true);
     getCashupHistory(branchId)
@@ -95,7 +97,7 @@ export default function CashupPage() {
     return () => {
       cancelled = true;
     };
-  }, [branchId]);
+  }, [branchId, loaded]);
 
   // ─── Load cashup data ──────────────────────────────────────────────
   const handleLoad = useCallback(
@@ -333,15 +335,24 @@ export default function CashupPage() {
               Already submitted
             </span>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleUnlock}
-            disabled={isPending}
-          >
-            <Pencil size={14} />
-            Edit
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setLoaded(false)}
+            >
+              Back to List
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleUnlock}
+              disabled={isPending}
+            >
+              <Pencil size={14} />
+              Edit
+            </Button>
+          </div>
         </div>
       )}
 
