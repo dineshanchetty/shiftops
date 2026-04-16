@@ -1255,11 +1255,12 @@ export default function DashboardPage() {
                   return (
                     <div className="flex items-end gap-0.5 h-14">
                       {next30.map((val, i) => {
-                        const h = Math.max(4, (val / maxV) * 100);
+                        const h = maxV > 0 ? Math.max(8, (val / maxV) * 100) : 8;
+                        const isWeekend = i % 7 >= 5;
                         return (
                           <div
                             key={i}
-                            className="flex-1 bg-accent/30 rounded-sm"
+                            className={`flex-1 rounded-sm ${isWeekend ? 'bg-orange-400/50' : 'bg-blue-500/40'}`}
                             style={{ height: `${h}%` }}
                           />
                         );
