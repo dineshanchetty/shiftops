@@ -131,8 +131,20 @@ export function VerificationPanel({
       .eq("id", docId)
       .single();
     if (!data?.file_data) return;
-    const win = window.open();
-    if (win) win.document.write(`<iframe src="${data.file_data}" style="width:100%;height:100vh;border:none;"></iframe>`);
+
+    const raw: string = data.file_data;
+    let base64 = raw;
+    let mimeType = "application/pdf";
+    const m = raw.match(/^data:([^;]+);base64,(.*)$/);
+    if (m) { mimeType = m[1]; base64 = m[2]; }
+
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], { type: mimeType });
+    const blobUrl = URL.createObjectURL(blob);
+    window.open(blobUrl, "_blank", "noopener,noreferrer");
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
   }
 
   async function handleOverrideField(field: FieldKey) {

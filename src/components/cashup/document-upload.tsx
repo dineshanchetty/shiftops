@@ -183,8 +183,8 @@ export function DocumentUpload({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cashupId]);
 
-  // Open a document — fetch file_data on demand
-  async function handleView(docId: string) {
+  // Convert stored file_data (data URL or raw base64) into a Blob URL
+  async function fetchAsBlobUrl(docId: string): Promise<{ blobUrl: string; fileName: string; mimeType: string } | null> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (supabase as any)
       .from("cashup_documents")
@@ -193,29 +193,44 @@ export function DocumentUpload({
       .single();
     if (error || !data?.file_data) {
       console.error("Failed to load file:", error?.message);
-      return;
+      return null;
     }
-    // file_data is stored as data URL "data:application/pdf;base64,..."
-    const dataUrl: string = data.file_data;
-    // Open in new tab
-    const win = window.open();
-    if (win) {
-      win.document.write(`<iframe src="${dataUrl}" style="width:100%;height:100vh;border:none;" title="${data.file_name}"></iframe>`);
+    const raw: string = data.file_data;
+    let base64 = raw;
+    let mimeType = "application/pdf";
+    // If stored as data URL, extract the base64 and MIME
+    const dataUrlMatch = raw.match(/^data:([^;]+);base64,(.*)$/);
+    if (dataUrlMatch) {
+      mimeType = dataUrlMatch[1];
+      base64 = dataUrlMatch[2];
     }
+    // Decode base64 into bytes
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], { type: mimeType });
+    const blobUrl = URL.createObjectURL(blob);
+    return { blobUrl, fileName: data.file_name as string, mimeType };
+  }
+
+  async function handleView(docId: string) {
+    const r = await fetchAsBlobUrl(docId);
+    if (!r) return;
+    window.open(r.blobUrl, "_blank", "noopener,noreferrer");
+    // Revoke URL after 60s so we don't leak memory (browser still has the tab open)
+    setTimeout(() => URL.revokeObjectURL(r.blobUrl), 60000);
   }
 
   async function handleDownload(docId: string) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data, error } = await (supabase as any)
-      .from("cashup_documents")
-      .select("file_data, file_name")
-      .eq("id", docId)
-      .single();
-    if (error || !data?.file_data) return;
+    const r = await fetchAsBlobUrl(docId);
+    if (!r) return;
     const link = document.createElement("a");
-    link.href = data.file_data as string;
-    link.download = data.file_name as string;
+    link.href = r.blobUrl;
+    link.download = r.fileName;
+    document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(r.blobUrl), 5000);
   }
 
   // New upload form state
