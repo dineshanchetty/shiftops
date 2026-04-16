@@ -99,20 +99,26 @@ const SUPPORTING_REPORT_PROMPTS: Partial<Record<ReportType, string>> = {
   stock_variance: `You are analyzing a "Stock Variance" PDF from Aura POS. Extract the total variance amount (positive or negative). Return JSON: { "total": <number> }`,
   cc_batch: `You are analyzing a credit card batch settlement report. Extract the TOTAL credit card amount processed. Return JSON: { "total": <number> }`,
   banking_slip: `You are analyzing a bank deposit slip. Extract the TOTAL deposit amount. Return JSON: { "total": <number> }`,
-  scan: `You are analyzing a scanned document from a restaurant cashup. It could be a credit card batch settlement receipt, a bank deposit slip, or something else.
+  scan: `You are analyzing a SCANNED document from a South African restaurant cashup. These are typically printed receipts/slips with a HANDWRITTEN total circled or written by the manager on top.
 
-First, CLASSIFY the document by identifying key phrases:
-- "CC batch" / "credit card" / "Batch Total" / "Settlement" / card brand names (Visa, Mastercard) → classification: "cc_batch"
-- "Deposit" / "Bank" / "Banking Slip" / "Pay-in" → classification: "banking_slip"
-- "Cashup" / "Gross Sales" / "Cash tendered" → classification: "cashup_summary"
-- Otherwise → classification: "other"
+IMPORTANT: The manager usually writes the total in pen/marker on the document. PRIORITIZE any handwritten amount over printed totals, as the handwritten total is the manager's confirmed figure.
 
-Then extract the TOTAL amount (grand total, settlement total, or final sum).
+First, CLASSIFY the document by identifying key phrases, logos, or visual features:
+- Multiple credit card slips stapled together, card logos (Visa/Mastercard), "Batch Total", "Settlement", "Merchant Copy" → classification: "cc_batch"
+- Bank deposit slip, bank branding (ABSA/FNB/Standard/Nedbank/Capitec), "Deposit", "Pay-in", "Credit", teller stamps → classification: "banking_slip"
+- Aura logo, "Shop Cashup", "Gross Sales", "Cash tendered" → classification: "cashup_summary"
+- Cannot determine → classification: "other"
+
+Then extract the TOTAL amount. Rules:
+1. If a handwritten total is visible (often circled, underlined, or written at top/bottom), USE THAT as the total.
+2. If no handwriting, sum the printed amounts on receipts or use the printed grand total.
+3. All amounts in ZAR without currency symbols.
 
 Return JSON: {
   "classification": "cc_batch" | "banking_slip" | "cashup_summary" | "other",
   "total": <number>,
-  "description": "<1 short sentence describing the document>"
+  "handwritten_total_detected": <true or false>,
+  "description": "<1 short sentence describing what you see, including whether the total is handwritten>"
 }`,
 };
 
