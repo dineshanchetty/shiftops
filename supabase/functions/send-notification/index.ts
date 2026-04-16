@@ -1,19 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
 
 /**
  * Send Notification — Edge Function
  *
- * Handles transactional email notifications for ShiftOps.
- * Currently stubbed with logging — production implementation should
- * integrate with a transactional email provider.
- *
- * Recommended providers (all have Deno/REST API support):
- *   - Resend (https://resend.com) — modern, developer-friendly, great DX
- *   - Postmark (https://postmarkapp.com) — excellent deliverability
- *   - SendGrid (https://sendgrid.com) — widely used, good free tier
- *
- * Notification types:
+ * Sends transactional emails via SendGrid for:
  *   - cashup-missing: Daily reminder when a branch hasn't submitted a cashup
  *   - roster-published: Alert staff when a new roster is published
  *   - invite: Invite a new user to join the tenant
@@ -22,8 +12,12 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 interface NotificationRequest {
   type: "cashup-missing" | "roster-published" | "invite";
   recipientEmail: string;
-  data: Record<string, any>;
+  data: Record<string, unknown>;
 }
+
+const SENDGRID_API_KEY = Deno.env.get("SENDGRID_API_KEY");
+const FROM_EMAIL = Deno.env.get("FROM_EMAIL") ?? "notifications@shiftops.co.za";
+const FROM_NAME = "ShiftOps";
 
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") {
@@ -34,7 +28,6 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    // Verify authorization — only service role or authenticated users
     const authHeader = req.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return new Response(JSON.stringify({ error: "Missing authorization token" }), {
@@ -46,7 +39,6 @@ Deno.serve(async (req: Request) => {
     const body: NotificationRequest = await req.json();
     const { type, recipientEmail, data } = body;
 
-    // Validate required fields
     if (!type || !recipientEmail) {
       return new Response(
         JSON.stringify({ error: "type and recipientEmail are required" }),
@@ -61,67 +53,46 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Build the email content based on type
     const emailContent = buildEmailContent(type, data);
 
-    console.log("=== SEND NOTIFICATION (STUBBED) ===");
-    console.log(`Type:      ${type}`);
-    console.log(`To:        ${recipientEmail}`);
-    console.log(`Subject:   ${emailContent.subject}`);
-    console.log(`Body:      ${emailContent.body.substring(0, 200)}...`);
-    console.log("===================================");
+    if (!SENDGRID_API_KEY) {
+      console.log("SENDGRID_API_KEY not set — logging email instead of sending");
+      console.log(`To: ${recipientEmail} | Subject: ${emailContent.subject}`);
+      return new Response(
+        JSON.stringify({ success: true, stubbed: true, message: `Would send to ${recipientEmail}` }),
+        { headers: { "Content-Type": "application/json" } }
+      );
+    }
 
-    // -----------------------------------------------------------------------
-    // PRODUCTION IMPLEMENTATION — Resend (recommended)
-    //
-    // 1. Set RESEND_API_KEY in Supabase Edge Function secrets:
-    //    supabase secrets set RESEND_API_KEY=re_xxxxxxxxxxxxx
-    //
-    // 2. Replace the stub above with:
-    //
-    //    const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY');
-    //
-    //    const res = await fetch('https://api.resend.com/emails', {
-    //      method: 'POST',
-    //      headers: {
-    //        'Authorization': `Bearer ${RESEND_API_KEY}`,
-    //        'Content-Type': 'application/json',
-    //      },
-    //      body: JSON.stringify({
-    //        from: 'ShiftOps <notifications@yourdomain.com>',
-    //        to: [recipientEmail],
-    //        subject: emailContent.subject,
-    //        html: emailContent.body,
-    //      }),
-    //    });
-    //
-    //    if (!res.ok) {
-    //      const errBody = await res.text();
-    //      console.error('Resend API error:', errBody);
-    //      return new Response(
-    //        JSON.stringify({ error: 'Failed to send email' }),
-    //        { status: 502, headers: { 'Content-Type': 'application/json' } }
-    //      );
-    //    }
-    //
-    //    const result = await res.json();
-    //    return new Response(
-    //      JSON.stringify({ success: true, messageId: result.id }),
-    //      { headers: { 'Content-Type': 'application/json' } }
-    //    );
-    // -----------------------------------------------------------------------
+    // Send via SendGrid
+    const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${SENDGRID_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: recipientEmail }] }],
+        from: { email: FROM_EMAIL, name: FROM_NAME },
+        subject: emailContent.subject,
+        content: [{ type: "text/html", value: emailContent.body }],
+      }),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text();
+      console.error("SendGrid API error:", res.status, errBody);
+      return new Response(
+        JSON.stringify({ error: "Failed to send email", details: errBody }),
+        { status: 502, headers: { "Content-Type": "application/json" } }
+      );
+    }
+
+    const messageId = res.headers.get("X-Message-Id") ?? "unknown";
+    console.log(`Email sent: ${type} → ${recipientEmail} (${messageId})`);
 
     return new Response(
-      JSON.stringify({
-        success: true,
-        stubbed: true,
-        message: `Notification '${type}' would be sent to ${recipientEmail}`,
-        email: {
-          subject: emailContent.subject,
-          recipientEmail,
-          type,
-        },
-      }),
+      JSON.stringify({ success: true, messageId }),
       { headers: { "Content-Type": "application/json" } }
     );
   } catch (err) {
@@ -139,59 +110,66 @@ Deno.serve(async (req: Request) => {
 
 function buildEmailContent(
   type: string,
-  data: Record<string, any>
+  data: Record<string, unknown>
 ): { subject: string; body: string } {
+  const baseStyle = `font-family:Inter,-apple-system,sans-serif;max-width:520px;margin:0 auto;padding:32px;background:#ffffff;border-radius:12px;`;
+  const btnStyle = `display:inline-block;background:#7C3AED;color:white;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;margin-top:16px;`;
+  const footerStyle = `color:#94a3b8;font-size:11px;margin-top:32px;padding-top:16px;border-top:1px solid #e2e8f0;`;
+
   switch (type) {
     case "cashup-missing":
       return {
-        subject: `Cashup Missing — ${data.branchName ?? "Branch"} (${data.date ?? "today"})`,
-        body: `
-          <div style="font-family:Inter,sans-serif;max-width:480px;margin:0 auto;padding:24px;">
-            <h2 style="color:#6c5ce7;">Daily Cashup Reminder</h2>
-            <p>Hi ${data.managerName ?? "Manager"},</p>
-            <p>The daily cashup for <strong>${data.branchName ?? "your branch"}</strong> on
-               <strong>${data.date ?? "today"}</strong> has not been submitted yet.</p>
-            <p>Please log in to ShiftOps and complete the cashup at your earliest convenience.</p>
-            <a href="${data.appUrl ?? "#"}" style="display:inline-block;background:#6c5ce7;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;margin-top:12px;">Open ShiftOps</a>
-            <p style="color:#94a3b8;font-size:12px;margin-top:24px;">This is an automated reminder from ShiftOps.</p>
-          </div>`,
+        subject: `⚠️ Cashup Missing — ${data.branchName ?? "Branch"} (${data.date ?? "today"})`,
+        body: `<div style="${baseStyle}">
+          <div style="text-align:center;margin-bottom:24px;">
+            <span style="font-size:48px;">⚠️</span>
+          </div>
+          <h2 style="color:#7C3AED;margin:0 0 16px;">Daily Cashup Reminder</h2>
+          <p style="color:#334155;">Hi ${data.managerName ?? "Manager"},</p>
+          <p style="color:#334155;">The daily cashup for <strong>${data.branchName ?? "your branch"}</strong> on
+             <strong>${data.date ?? "today"}</strong> has not been submitted yet.</p>
+          <p style="color:#334155;">Please log in to ShiftOps and complete the cashup at your earliest convenience.</p>
+          <a href="${data.appUrl ?? "https://shiftops.co.za/app/cashup"}" style="${btnStyle}">Open Cashup</a>
+          <p style="${footerStyle}">This is an automated reminder from ShiftOps.</p>
+        </div>`,
       };
 
     case "roster-published":
       return {
-        subject: `New Roster Published — ${data.branchName ?? "Branch"} (${data.period ?? ""})`,
-        body: `
-          <div style="font-family:Inter,sans-serif;max-width:480px;margin:0 auto;padding:24px;">
-            <h2 style="color:#6c5ce7;">Roster Published</h2>
-            <p>Hi ${data.staffName ?? "Team"},</p>
-            <p>A new roster has been published for <strong>${data.branchName ?? "your branch"}</strong>
-               covering <strong>${data.period ?? "the upcoming period"}</strong>.</p>
-            <p>Log in to ShiftOps to view your shifts.</p>
-            <a href="${data.appUrl ?? "#"}" style="display:inline-block;background:#6c5ce7;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;margin-top:12px;">View Roster</a>
-            <p style="color:#94a3b8;font-size:12px;margin-top:24px;">This is an automated notification from ShiftOps.</p>
-          </div>`,
+        subject: `📅 New Roster Published — ${data.branchName ?? "Branch"} (${data.period ?? ""})`,
+        body: `<div style="${baseStyle}">
+          <div style="text-align:center;margin-bottom:24px;">
+            <span style="font-size:48px;">📅</span>
+          </div>
+          <h2 style="color:#7C3AED;margin:0 0 16px;">Roster Published</h2>
+          <p style="color:#334155;">Hi ${data.staffName ?? "Team"},</p>
+          <p style="color:#334155;">A new roster has been published for <strong>${data.branchName ?? "your branch"}</strong>
+             covering <strong>${data.period ?? "the upcoming period"}</strong>.</p>
+          <a href="${data.appUrl ?? "https://shiftops.co.za/app/roster"}" style="${btnStyle}">View Roster</a>
+          <p style="${footerStyle}">This is an automated notification from ShiftOps.</p>
+        </div>`,
       };
 
     case "invite":
       return {
-        subject: `You've been invited to ShiftOps — ${data.tenantName ?? ""}`,
-        body: `
-          <div style="font-family:Inter,sans-serif;max-width:480px;margin:0 auto;padding:24px;">
-            <h2 style="color:#6c5ce7;">You're Invited!</h2>
-            <p>Hi,</p>
-            <p><strong>${data.inviterName ?? "Your manager"}</strong> has invited you to join
-               <strong>${data.tenantName ?? "their team"}</strong> on ShiftOps.</p>
-            <p>ShiftOps is a franchise operations platform for managing rosters, daily cashups, and reports.</p>
-            <p>Click below to accept the invitation and set up your account:</p>
-            <a href="${data.inviteUrl ?? "#"}" style="display:inline-block;background:#6c5ce7;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;margin-top:12px;">Accept Invitation</a>
-            <p style="color:#94a3b8;font-size:12px;margin-top:24px;">This invitation expires in 7 days.</p>
-          </div>`,
+        subject: `🎉 You're invited to ShiftOps — ${data.tenantName ?? ""}`,
+        body: `<div style="${baseStyle}">
+          <div style="text-align:center;margin-bottom:24px;">
+            <span style="font-size:48px;">🎉</span>
+          </div>
+          <h2 style="color:#7C3AED;margin:0 0 16px;">You're Invited!</h2>
+          <p style="color:#334155;"><strong>${data.inviterName ?? "Your manager"}</strong> has invited you to join
+             <strong>${data.tenantName ?? "their team"}</strong> on ShiftOps.</p>
+          <p style="color:#334155;">ShiftOps helps manage rosters, daily cashups, and franchise operations.</p>
+          <a href="${data.inviteUrl ?? "#"}" style="${btnStyle}">Accept Invitation</a>
+          <p style="${footerStyle}">This invitation expires in 7 days.</p>
+        </div>`,
       };
 
     default:
       return {
         subject: "ShiftOps Notification",
-        body: `<p>You have a new notification from ShiftOps.</p>`,
+        body: `<div style="${baseStyle}"><p style="color:#334155;">You have a new notification from ShiftOps.</p></div>`,
       };
   }
 }

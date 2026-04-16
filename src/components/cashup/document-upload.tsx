@@ -153,6 +153,8 @@ export function DocumentUpload({
   const [pendingDocType, setPendingDocType] = useState<DocType>("other");
   const [pendingEnteredTotal, setPendingEnteredTotal] = useState<string>("");
   const [pendingNotes, setPendingNotes] = useState<string>("");
+  const [aiParsing, setAiParsing] = useState(false);
+  const [aiResult, setAiResult] = useState<{ amount: number | null; confidence: string; rawText: string } | null>(null);
 
   const selectClass = cn(
     "h-9 rounded-lg border border-base-200 bg-surface px-3 text-sm text-base-900",
@@ -171,7 +173,44 @@ export function DocumentUpload({
       return;
     }
     setPendingFile(file);
-  }, []);
+
+    // Auto-trigger AI parsing for image files
+    if (file.type.startsWith("image/")) {
+      setAiParsing(true);
+      setAiResult(null);
+      const reader = new FileReader();
+      reader.onload = async () => {
+        try {
+          const base64 = (reader.result as string).split(",")[1]; // Remove data:image/... prefix
+          const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+          const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+          const res = await fetch(`${supabaseUrl}/functions/v1/parse-cashup-document`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${supabaseKey}`,
+            },
+            body: JSON.stringify({
+              imageBase64: base64,
+              mimeType: file.type,
+              docType: pendingDocType !== "other" ? pendingDocType : "banking_slip",
+            }),
+          });
+          if (res.ok) {
+            const result = await res.json();
+            setAiResult(result);
+            if (result.amount !== null) {
+              setPendingEnteredTotal(String(result.amount));
+            }
+          }
+        } catch (err) {
+          console.error("AI parse failed:", err);
+        }
+        setAiParsing(false);
+      };
+      reader.readAsDataURL(file);
+    }
+  }, [pendingDocType]);
 
   function handleDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault();
@@ -378,10 +417,42 @@ export function DocumentUpload({
                     <label className="block text-sm font-medium text-base-700 mb-1.5">
                       Total on Document (R)
                     </label>
+
+                    {/* AI parsing status */}
+                    {aiParsing && (
+                      <div className="flex items-center gap-2 mb-2 px-3 py-2 rounded-lg bg-purple-50 border border-purple-200 text-sm text-purple-700">
+                        <div className="animate-spin h-3 w-3 border-2 border-purple-500 border-t-transparent rounded-full" />
+                        Analyzing document with AI...
+                      </div>
+                    )}
+
+                    {/* AI result */}
+                    {aiResult && !aiParsing && (
+                      <div className={cn(
+                        "flex items-center gap-2 mb-2 px-3 py-2 rounded-lg text-sm",
+                        aiResult.confidence === "high" ? "bg-green-50 border border-green-200 text-green-700" :
+                        aiResult.confidence === "medium" ? "bg-amber-50 border border-amber-200 text-amber-700" :
+                        "bg-gray-50 border border-gray-200 text-gray-600"
+                      )}>
+                        <span className="font-semibold">
+                          AI extracted: R{aiResult.amount?.toFixed(2) ?? "—"}
+                        </span>
+                        <span className={cn(
+                          "text-[10px] font-bold uppercase px-1.5 py-0.5 rounded",
+                          aiResult.confidence === "high" ? "bg-green-200 text-green-800" :
+                          aiResult.confidence === "medium" ? "bg-amber-200 text-amber-800" :
+                          "bg-gray-200 text-gray-600"
+                        )}>
+                          {aiResult.confidence}
+                        </span>
+                        <span className="text-xs text-gray-400 ml-auto truncate max-w-[200px]">{aiResult.rawText}</span>
+                      </div>
+                    )}
+
                     <input
                       type="number"
                       step="0.01"
-                      placeholder="0.00"
+                      placeholder={aiResult?.amount ? String(aiResult.amount) : "0.00"}
                       value={pendingEnteredTotal}
                       onChange={(e) => setPendingEnteredTotal(e.target.value)}
                       className="h-9 w-full rounded-lg border border-base-200 bg-surface px-3 text-sm text-base-900 focus:outline-none focus:ring-2 focus:ring-accent focus:border-accent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
