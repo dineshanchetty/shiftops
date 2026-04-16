@@ -29,8 +29,20 @@ jobs:
       - name: Prepare standalone package
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          cp -r .next/static .next/standalone/.next/static
+          # Copy static assets into standalone output
+          mkdir -p .next/standalone/.next/static
+          cp -r .next/static/* .next/standalone/.next/static/
           cp -r public .next/standalone/public 2>/dev/null || true
+
+          # Create startup script
+          cat > .next/standalone/start.sh << 'STARTUP'
+          #!/bin/bash
+          export PORT=${PORT:-8080}
+          export HOSTNAME="0.0.0.0"
+          node server.js
+          STARTUP
+          chmod +x .next/standalone/start.sh
+
           cd .next/standalone
           zip -r ../../deploy.zip .
           cd ../..
