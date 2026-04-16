@@ -257,14 +257,14 @@ function buildThreeMonthForecast(
 
   // Generate 3 full months starting from the 1st of NEXT month
   const now = new Date();
-  const startDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const startYear = now.getMonth() === 11 ? now.getFullYear() + 1 : now.getFullYear();
+  const startMonth = now.getMonth() === 11 ? 0 : now.getMonth() + 1;
 
   const monthsMap = new Map<string, DailyForecast[]>();
 
   for (let i = 0; i < 90; i++) {
-    const d = new Date(startDate);
-    d.setDate(startDate.getDate() + i);
-    const dateStr = d.toISOString().split('T')[0];
+    const d = new Date(startYear, startMonth, 1 + i);
+    const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     const monthKey = dateStr.slice(0, 7);
     const dow = d.getDay();
 
