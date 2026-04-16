@@ -12,6 +12,7 @@ import {
   Settings,
   LogOut,
   Upload,
+  UserCog,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -28,6 +29,7 @@ const navGroups = [
     items: [
       { label: 'Dashboard', href: '/app', icon: LayoutDashboard },
       { label: 'Roster', href: '/app/roster', icon: Calendar },
+      { label: 'Managers Roster', href: '/app/managers-roster', icon: UserCog },
       { label: 'Cashup', href: '/app/cashup', icon: Receipt },
       { label: 'Aura Upload', href: '/app/aura-upload', icon: Upload },
     ],
