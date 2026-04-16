@@ -16,6 +16,9 @@ import {
   Download,
   AlertCircle,
   CheckCircle2,
+  Mail,
+  Copy,
+  Check,
 } from "lucide-react";
 import { cn, formatDate } from "@/lib/utils";
 import type { Branch, AuraImport } from "@/lib/types";
@@ -32,6 +35,7 @@ export default function BranchDetailPage() {
 
   const [tab, setTab] = useState<Tab>("general");
   const [branch, setBranch] = useState<Branch | null>(null);
+  const [emailCopied, setEmailCopied] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
@@ -356,6 +360,43 @@ export default function BranchDetailPage() {
 
       {tab === "aura" && (
         <div className="space-y-6">
+          {/* Email Ingest — unique per-branch address */}
+          {(branch as unknown as { email_code?: string })?.email_code && (
+            <Card className="border-purple-200 bg-purple-50/30">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Mail size={18} className="text-purple-600" />
+                  Email Ingest
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 max-w-2xl">
+                <p className="text-sm text-base-600">
+                  Forward your daily Aura CSV exports to this address — they&apos;ll be auto-imported.
+                </p>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 px-3 py-2 rounded-lg border border-purple-200 bg-white font-mono text-sm text-purple-700 select-all">
+                    aura+{(branch as unknown as { email_code: string }).email_code}@aura.shiftops.co.za
+                  </code>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => {
+                      const addr = `aura+${(branch as unknown as { email_code: string }).email_code}@aura.shiftops.co.za`;
+                      navigator.clipboard.writeText(addr);
+                      setEmailCopied(true);
+                      setTimeout(() => setEmailCopied(false), 1500);
+                    }}
+                  >
+                    {emailCopied ? <><Check size={14} /> Copied</> : <><Copy size={14} /> Copy</>}
+                  </Button>
+                </div>
+                <div className="text-xs text-purple-600 bg-purple-100/50 rounded-lg px-3 py-2">
+                  <strong>Tip:</strong> CSV attachments are auto-matched to this branch using the unique code (<code className="font-mono">{(branch as unknown as { email_code: string }).email_code}</code>) in the address. Field mappings from your last manual upload will be used.
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* SFTP Settings */}
           <Card>
             <CardHeader>

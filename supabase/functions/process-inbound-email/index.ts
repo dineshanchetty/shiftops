@@ -120,43 +120,53 @@ Deno.serve(async (req: Request) => {
     const delimiter = firstLine.includes("\t") ? "\t" : ",";
     const headers = firstLine.split(delimiter).map((h) => h.trim().replace(/^"|"$/g, ""));
 
-    // Try to identify the branch from subject line or sender
-    // Subject format might be: "Daily Report - Mandela Park" or "AURA Export 2026-04-16"
-    const subjectLower = subject.toLowerCase();
-    const fromLower = from.toLowerCase();
+    // Identify branch from recipient's +tag (e.g. aura+abc123@aura.shiftops.co.za)
+    const toAddress = formData.get("to")?.toString() ?? "";
+    const codeMatch = toAddress.match(/\+([a-z0-9]+)@/i);
+    const emailCode = codeMatch?.[1]?.toLowerCase();
 
-    // Look up all branches to match
-    const { data: allBranches } = await supabase.from("branches").select("id, name, tenant_id");
+    console.log(`Recipient: ${toAddress}, extracted code: ${emailCode}`);
 
-    let matchedBranch: { id: string; name: string; tenant_id: string } | null = null;
-    for (const branch of allBranches ?? []) {
-      const branchLower = branch.name.toLowerCase();
-      if (subjectLower.includes(branchLower) || fromLower.includes(branchLower)) {
-        matchedBranch = branch;
-        break;
-      }
+    if (!emailCode) {
+      console.error("No +tag found in recipient address:", toAddress);
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: "Recipient address missing branch code (e.g. aura+<code>@aura.shiftops.co.za)"
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
+
+    const { data: matchedBranch } = await supabase
+      .from("branches")
+      .select("id, name, tenant_id")
+      .eq("email_code", emailCode)
+      .maybeSingle();
 
     if (!matchedBranch) {
-      // Try first branch as fallback if only one exists per tenant
-      const { data: singleBranch } = await supabase.from("branches").select("id, name, tenant_id").limit(1).single();
-      if (singleBranch) matchedBranch = singleBranch;
+      console.error("No branch found for code:", emailCode);
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: `No branch found for code '${emailCode}'. Check the alias in Settings > Branches > Aura tab.`
+        }),
+        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
-    if (!matchedBranch) {
-      console.error("Could not identify branch from email");
-      return new Response(JSON.stringify({ success: false, error: "Could not identify branch" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+    console.log(`Matched branch: ${matchedBranch.name} (${matchedBranch.id})`);
 
-    // Look up field mappings for this tenant
-    const { data: mappings } = await supabase
+    // Look up field mappings — prefer branch-specific, fall back to tenant default
+    const { data: mappingRows } = await supabase
       .from("aura_field_mappings")
       .select("*")
       .eq("tenant_id", matchedBranch.tenant_id)
-      .single();
+      .or(`branch_id.eq.${matchedBranch.id},branch_id.is.null`)
+      .order("branch_id", { ascending: false, nullsFirst: false })
+      .limit(1);
+
+    const mappings = mappingRows?.[0] ?? null;
 
     if (!mappings) {
       console.error("No field mappings configured for tenant");
