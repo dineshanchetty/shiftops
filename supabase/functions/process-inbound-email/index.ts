@@ -99,28 +99,42 @@ const SUPPORTING_REPORT_PROMPTS: Partial<Record<ReportType, string>> = {
   stock_variance: `You are analyzing a "Stock Variance" PDF from Aura POS. Extract the total variance amount (positive or negative). Return JSON: { "total": <number> }`,
   cc_batch: `You are analyzing a credit card batch settlement report. Extract the TOTAL credit card amount processed. Return JSON: { "total": <number> }`,
   banking_slip: `You are analyzing a bank deposit slip. Extract the TOTAL deposit amount. Return JSON: { "total": <number> }`,
-  scan: `You are analyzing a SCANNED document from a South African restaurant cashup. These are typically printed receipts/slips with a HANDWRITTEN total circled or written by the manager on top.
+  scan: `__SCAN_PROMPT_TEMPLATE__`, // Replaced per-call with date-aware version
+};
 
-IMPORTANT: The manager usually writes the total in pen/marker on the document. PRIORITIZE any handwritten amount over printed totals, as the handwritten total is the manager's confirmed figure.
+function buildScanPrompt(reportDate: string, cashupFields: Record<string, number | null>): string {
+  const hints: string[] = [];
+  if (cashupFields.credit_cards != null) hints.push(`- Credit Cards (expected if CC batch): R${cashupFields.credit_cards.toFixed(2)}`);
+  if (cashupFields.cash_banked != null) hints.push(`- Cash Banked (expected if banking slip): R${cashupFields.cash_banked.toFixed(2)}`);
+  if (cashupFields.gross_turnover != null) hints.push(`- Gross Turnover (if cashup summary): R${cashupFields.gross_turnover.toFixed(2)}`);
+  const hintsBlock = hints.length > 0
+    ? `\n\nSANITY CHECK HINTS: The cashup summary for ${reportDate} shows:\n${hints.join("\n")}\nUse these as sanity checks. If your handwritten reading is 5-10x larger or smaller than the expected figure, you may have misread a digit (common: reading "5" as "25" if a mark is nearby). Re-examine the digits carefully.`
+    : "";
 
-First, CLASSIFY the document by identifying key phrases, logos, or visual features:
-- Multiple credit card slips stapled together, card logos (Visa/Mastercard), "Batch Total", "Settlement", "Merchant Copy" → classification: "cc_batch"
-- Bank deposit slip, bank branding (ABSA/FNB/Standard/Nedbank/Capitec), "Deposit", "Pay-in", "Credit", teller stamps → classification: "banking_slip"
-- Aura logo, "Shop Cashup", "Gross Sales", "Cash tendered" → classification: "cashup_summary"
-- Cannot determine → classification: "other"
+  return `You are analyzing a SCANNED document from a South African restaurant cashup for date ${reportDate}. These documents are printed receipts/slips/logs with HANDWRITTEN totals written by the manager in pen/marker.
 
-Then extract the TOTAL amount. Rules:
-1. If a handwritten total is visible (often circled, underlined, or written at top/bottom), USE THAT as the total.
-2. If no handwriting, sum the printed amounts on receipts or use the printed grand total.
-3. All amounts in ZAR without currency symbols.
+CRITICAL RULES:
+1. The total for the day is usually HANDWRITTEN (circled, underlined, or written at top/bottom). PRIORITIZE handwritten amounts.
+2. If the document is a BANKING LOG with MULTIPLE DATES, find the row for ${reportDate} and use its BANKING TOTAL (usually the rightmost or bottom value for that date).
+3. For CC batch reports, use the handwritten "TOTAL BATCH" at the top.
+4. Be extra careful reading handwritten digits. Look at the digit count and first digit carefully — a "5" can be mistaken for "25" if there's a stray mark.
+
+CLASSIFY the document:
+- Multiple credit card transaction slips or ABSA/FNB/Nedbank/Standard merchant batch report + card brands (Visa/Mastercard) + "Batch Total" / "Settlement" → "cc_batch"
+- Banking log/register with columns like DATE, BAG NO, AMOUNT, CASHIER, MANAGER, SIGN, or bank deposit slip / teller stamp → "banking_slip"
+- Aura logo + "Shop Cashup" / "Gross Sales" / "Cash tendered" → "cashup_summary"
+- Cannot determine → "other"
+
+Extract the TOTAL for ${reportDate} only. Amounts in ZAR without currency symbols.${hintsBlock}
 
 Return JSON: {
   "classification": "cc_batch" | "banking_slip" | "cashup_summary" | "other",
-  "total": <number>,
+  "total": <number for date ${reportDate}>,
   "handwritten_total_detected": <true or false>,
-  "description": "<1 short sentence describing what you see, including whether the total is handwritten>"
-}`,
-};
+  "matches_expected_range": <true if your total is within 10% of the relevant hint, false if far off>,
+  "description": "<1 short sentence describing what you see, and note if you had to reconsider due to hints>"
+}`;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -378,7 +392,14 @@ Deno.serve(async (req: Request) => {
     for (const pdf of pdfs) {
       const isCashupSummary = pdf === summaryPdf;
       let reportInfo = pdf.info;
-      const prompt = isCashupSummary ? null : SUPPORTING_REPORT_PROMPTS[pdf.info.type];
+      let prompt: string | undefined;
+      if (!isCashupSummary) {
+        if (pdf.info.type === "scan") {
+          prompt = buildScanPrompt(cashupDate ?? "unknown date", cashupFields);
+        } else {
+          prompt = SUPPORTING_REPORT_PROMPTS[pdf.info.type];
+        }
+      }
       let extractedData: Record<string, unknown> | null = null;
       let extractedTotal: number | null = null;
       let verificationStatus: "pending" | "verified" | "mismatch" = "pending";
