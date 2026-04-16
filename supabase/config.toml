@@ -1,0 +1,13 @@
+project_id = "twueamtpxsbejihsmduc"
+
+[functions.process-inbound-email]
+# SendGrid Inbound Parse cannot send auth headers — must be public
+verify_jwt = false
+
+[functions.parse-cashup-document]
+# Called from authenticated client with anon key in header
+verify_jwt = true
+
+[functions.send-notification]
+# Called from authenticated server-side only
+verify_jwt = true
