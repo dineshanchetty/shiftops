@@ -19,6 +19,7 @@ import {
 } from "@/app/app/cashup/actions";
 import { AttendanceTable } from "./attendance-table";
 import { DocumentUpload } from "./document-upload";
+import { VerificationPanel } from "./verification-panel";
 import type { AuraImport } from "@/lib/types";
 
 // ─── Channel display names ───────────────────────────────────────────────────
@@ -33,7 +34,7 @@ const CHANNEL_LABELS: Record<string, string> = {
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────
 
-type CashupTab = "takings" | "drivers" | "banking" | "purchases" | "attendance" | "documents";
+type CashupTab = "takings" | "drivers" | "banking" | "purchases" | "attendance" | "documents" | "verification";
 
 const TABS: { key: CashupTab; label: string }[] = [
   { key: "takings", label: "Takings" },
@@ -42,6 +43,7 @@ const TABS: { key: CashupTab; label: string }[] = [
   { key: "purchases", label: "Purchases" },
   { key: "attendance", label: "Attendance" },
   { key: "documents", label: "Documents" },
+  { key: "verification", label: "Verification" },
 ];
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -675,6 +677,31 @@ export function CashupForm({
             cashBanked={cashBanked}
             tenantId={tenantId}
             readOnly={readOnly}
+          />
+        </div>
+
+        {/* ── Tab: Verification ─────────────────────────────────────── */}
+        <div className={activeTab === "verification" ? "block" : "hidden"}>
+          <VerificationPanel
+            cashupId={existingCashup?.id ?? null}
+            tenantId={tenantId}
+            readOnly={readOnly}
+            initialCashup={{
+              gross_turnover: grossTurnover,
+              discounts,
+              delivery_charges: deliveryCharges,
+              credit_cards: creditCards,
+              cash_banked: cashBanked,
+              debtors,
+            }}
+            onFieldUpdate={(field, value) => {
+              if (field === "gross_turnover") setGrossTurnover(value);
+              else if (field === "discounts") setDiscounts(value);
+              else if (field === "delivery_charges") setDeliveryCharges(value);
+              else if (field === "credit_cards") setCreditCards(value);
+              else if (field === "cash_banked") setCashBanked(value);
+              else if (field === "debtors") setDebtors(value);
+            }}
           />
         </div>
 
