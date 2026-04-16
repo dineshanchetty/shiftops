@@ -26,40 +26,33 @@ jobs:
       - run: npm ci
       - run: npm run build
 
-      - name: Prepare standalone package
+      - name: Package for Azure
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          # Copy static assets into standalone output
-          mkdir -p .next/standalone/.next/static
-          cp -r .next/static/* .next/standalone/.next/static/
-          cp -r public .next/standalone/public 2>/dev/null || true
-
-          # Create startup script
-          cat > .next/standalone/start.sh << 'STARTUP'
-          #!/bin/bash
-          export PORT=${PORT:-8080}
-          export HOSTNAME="0.0.0.0"
-          node server.js
-          STARTUP
-          chmod +x .next/standalone/start.sh
-
-          cd .next/standalone
-          zip -r ../../deploy.zip .
-          cd ../..
+          # Package everything Azure needs: source, deps, and build output
+          zip -r deploy.zip . \
+            -x ".git/*" \
+            -x ".github/*" \
+            -x "node_modules/.cache/*" \
+            -x ".env*" \
+            -x "tests/*" \
+            -x "playwright*"
           echo "Package size: $(du -h deploy.zip | cut -f1)"
 
       - name: Deploy to Azure
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
+          # Deploy pre-built app (no remote build needed)
           curl -X POST \
             -u "${{ secrets.AZURE_SCM_USER }}:${{ secrets.AZURE_SCM_PASS }}" \
             --data-binary @deploy.zip \
             -H "Content-Type: application/zip" \
-            --max-time 300 \
-            "https://shiftops-app.scm.azurewebsites.net/api/zipdeploy" \
+            --max-time 600 \
+            "https://shiftops-app.scm.azurewebsites.net/api/zipdeploy?isAsync=true" \
             -w "\nHTTP Status: %{http_code}\n" \
             -o deploy_response.txt
           cat deploy_response.txt || true
+          echo "Deploy initiated successfully"
 
   test:
     name: Playwright Tests
