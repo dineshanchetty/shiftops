@@ -4,22 +4,27 @@ import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { PageShell } from "@/components/layout/page-shell";
 import { saveRosterEntries } from "@/app/app/roster/actions";
-import { Check, Loader2 } from "lucide-react";
+import { Check, Loader2, Copy, Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import type { Branch, Position, Staff, RosterEntry } from "@/lib/types";
 
 type EntryWithStaff = RosterEntry & {
   staff: { first_name: string; last_name: string; position_id: string | null; sub_position_id: string | null };
 };
 
-// Cell state for a single manager on a single day
 interface CellState {
   entryId?: string;
-  start: string; // "08:00" or ""
-  end: string;   // "20:00" or ""
+  start: string;
+  end: string;
   isLeave: boolean;
 }
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const QUICK_SHIFTS = [
+  { label: "Full", start: "08:00", end: "20:00" },
+  { label: "AM", start: "08:00", end: "14:00" },
+  { label: "PM", start: "14:00", end: "20:00" },
+];
 
 function toDateStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -36,6 +41,11 @@ function calcHours(start: string, end: string): number {
   return Math.max(0, (eh * 60 + em - sh * 60 - sm) / 60);
 }
 
+function fmtTime(t: string): string {
+  if (!t) return "";
+  return t.slice(0, 5);
+}
+
 export default function ManagersRosterPage() {
   const supabase = createClient();
   const now = new Date();
@@ -48,13 +58,18 @@ export default function ManagersRosterPage() {
   const [month, setMonth] = useState(now.getMonth());
   const [year, setYear] = useState(now.getFullYear());
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState<string | null>(null); // "date-staffId"
-  const [saved, setSaved] = useState<string | null>(null);
+  const [saving, setSaving] = useState<Set<string>>(new Set());
+  const [saved, setSaved] = useState<Set<string>>(new Set());
+  const [showPrefill, setShowPrefill] = useState(false);
+  const [prefillMgr, setPrefillMgr] = useState<string>("");
+  const [prefillPattern, setPrefillPattern] = useState<Record<number, { start: string; end: string }>>(
+    // Default: Mon-Fri 08:00-20:00
+    { 1: { start: "08:00", end: "20:00" }, 2: { start: "08:00", end: "20:00" }, 3: { start: "08:00", end: "20:00" }, 4: { start: "08:00", end: "20:00" }, 5: { start: "08:00", end: "20:00" } }
+  );
+  const [bulkSaving, setBulkSaving] = useState(false);
 
-  // Grid data: { "2026-05-01_staffId": CellState }
   const [grid, setGrid] = useState<Record<string, CellState>>({});
 
-  // Month options
   const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
   // Load initial data
@@ -78,21 +93,18 @@ export default function ManagersRosterPage() {
 
       const branchList = (branchRes.data ?? []) as Branch[];
       setBranches(branchList);
-      if (branchList.length > 0 && !selectedBranch) {
+      if (branchList.length > 0) {
         setSelectedBranch(branchList[0].id);
       }
 
       const positions = (posRes.data ?? []) as Position[];
       const mgrPos = positions.find((p) => p.name.toLowerCase() === "manager");
-      if (mgrPos) {
-        setManagerPosId(mgrPos.id);
-      }
+      if (mgrPos) setManagerPosId(mgrPos.id);
     }
     load();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load managers and roster entries when branch/month changes
   const loadRoster = useCallback(async () => {
     if (!selectedBranch || !tenantId || !managerPosId) return;
     setLoading(true);
@@ -108,7 +120,6 @@ export default function ManagersRosterPage() {
     const mgrList = (staffData ?? []) as Staff[];
     setManagers(mgrList);
 
-    // Get existing roster entries for this month
     const startDate = `${year}-${String(month + 1).padStart(2, "0")}-01`;
     const endDate = `${year}-${String(month + 1).padStart(2, "0")}-${daysInMonth(month, year)}`;
 
@@ -120,28 +131,24 @@ export default function ManagersRosterPage() {
       .gte("date", startDate)
       .lte("date", endDate);
 
-    // Build grid
     const newGrid: Record<string, CellState> = {};
     const entryList = (entries ?? []) as EntryWithStaff[];
-
-    // Initialize all cells as empty
     const numDays = daysInMonth(month, year);
+
     for (let d = 1; d <= numDays; d++) {
       const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
       for (const mgr of mgrList) {
-        const key = `${dateStr}_${mgr.id}`;
-        newGrid[key] = { start: "", end: "", isLeave: false };
+        newGrid[`${dateStr}_${mgr.id}`] = { start: "", end: "", isLeave: false };
       }
     }
 
-    // Fill from existing entries
     for (const entry of entryList) {
       const key = `${entry.date}_${entry.staff_id}`;
       if (newGrid[key] !== undefined) {
         newGrid[key] = {
           entryId: entry.id,
-          start: entry.shift_start?.slice(0, 5) ?? "",
-          end: entry.shift_end?.slice(0, 5) ?? "",
+          start: fmtTime(entry.shift_start ?? ""),
+          end: fmtTime(entry.shift_end ?? ""),
           isLeave: entry.is_off ?? false,
         };
       }
@@ -152,20 +159,16 @@ export default function ManagersRosterPage() {
   }, [selectedBranch, tenantId, managerPosId, month, year, supabase]);
 
   useEffect(() => {
-    if (selectedBranch && tenantId && managerPosId) {
-      loadRoster();
-    }
+    if (selectedBranch && tenantId && managerPosId) loadRoster();
   }, [selectedBranch, tenantId, managerPosId, month, year, loadRoster]);
 
-  // Auto-save a cell when it changes
+  // Save a single cell
   async function handleCellSave(dateStr: string, staffId: string) {
     const key = `${dateStr}_${staffId}`;
     const cell = grid[key];
     if (!cell) return;
 
-    const saveKey = key;
-    setSaving(saveKey);
-
+    setSaving((prev) => new Set(prev).add(key));
     const hours = cell.isLeave ? 0 : calcHours(cell.start, cell.end);
 
     await saveRosterEntries([{
@@ -180,53 +183,110 @@ export default function ManagersRosterPage() {
       tenantId,
     }]);
 
-    // If no entryId, reload to get it
-    if (!cell.entryId) {
-      await loadRoster();
-    }
+    if (!cell.entryId) await loadRoster();
 
-    setSaving(null);
-    setSaved(saveKey);
-    setTimeout(() => setSaved(null), 1500);
+    setSaving((prev) => { const n = new Set(prev); n.delete(key); return n; });
+    setSaved((prev) => new Set(prev).add(key));
+    setTimeout(() => setSaved((prev) => { const n = new Set(prev); n.delete(key); return n; }), 1500);
   }
 
-  function updateCell(dateStr: string, staffId: string, field: "start" | "end", value: string) {
+  // Quick shift — set start/end and save
+  function applyQuickShift(dateStr: string, staffId: string, start: string, end: string) {
     const key = `${dateStr}_${staffId}`;
     setGrid((prev) => ({
       ...prev,
-      [key]: { ...prev[key], [field]: value, isLeave: false },
+      [key]: { ...prev[key], start, end, isLeave: false },
     }));
+    setTimeout(() => handleCellSave(dateStr, staffId), 50);
   }
 
+  // Toggle leave
   function toggleLeave(dateStr: string, staffId: string) {
     const key = `${dateStr}_${staffId}`;
     setGrid((prev) => {
       const cell = prev[key];
-      const newLeave = !cell.isLeave;
       return {
         ...prev,
-        [key]: { ...cell, isLeave: newLeave, start: newLeave ? "" : cell.start, end: newLeave ? "" : cell.end },
+        [key]: { ...cell, isLeave: !cell.isLeave, start: "", end: "" },
       };
     });
-    // Auto-save after toggling
-    setTimeout(() => handleCellSave(dateStr, staffId), 100);
+    setTimeout(() => handleCellSave(dateStr, staffId), 50);
+  }
+
+  // Clear cell
+  function clearCell(dateStr: string, staffId: string) {
+    const key = `${dateStr}_${staffId}`;
+    setGrid((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], start: "", end: "", isLeave: false },
+    }));
+    setTimeout(() => handleCellSave(dateStr, staffId), 50);
+  }
+
+  // Pre-fill: apply weekly pattern to entire month for a manager
+  async function applyPrefill() {
+    if (!prefillMgr) return;
+    setBulkSaving(true);
+
+    const numDays = daysInMonth(month, year);
+    const entriesToSave: Parameters<typeof saveRosterEntries>[0] = [];
+    const updatedGrid = { ...grid };
+
+    for (let d = 1; d <= numDays; d++) {
+      const dateObj = new Date(year, month, d);
+      const dow = dateObj.getDay();
+      const dateStr = toDateStr(dateObj);
+      const key = `${dateStr}_${prefillMgr}`;
+      const pattern = prefillPattern[dow];
+
+      if (pattern && pattern.start && pattern.end) {
+        const hours = calcHours(pattern.start, pattern.end);
+        updatedGrid[key] = { ...updatedGrid[key], start: pattern.start, end: pattern.end, isLeave: false };
+        entriesToSave.push({
+          id: updatedGrid[key]?.entryId,
+          staffId: prefillMgr,
+          date: dateStr,
+          shiftStart: pattern.start,
+          shiftEnd: pattern.end,
+          shiftHours: hours,
+          isOff: false,
+          branchId: selectedBranch,
+          tenantId,
+        });
+      } else {
+        updatedGrid[key] = { ...updatedGrid[key], start: "", end: "", isLeave: false };
+        entriesToSave.push({
+          id: updatedGrid[key]?.entryId,
+          staffId: prefillMgr,
+          date: dateStr,
+          isOff: true,
+          branchId: selectedBranch,
+          tenantId,
+        });
+      }
+    }
+
+    setGrid(updatedGrid);
+
+    // Save in batches of 10
+    for (let i = 0; i < entriesToSave.length; i += 10) {
+      await saveRosterEntries(entriesToSave.slice(i, i + 10));
+    }
+
+    await loadRoster();
+    setBulkSaving(false);
+    setShowPrefill(false);
   }
 
   // Build day rows
   const numDays = daysInMonth(month, year);
   const today = toDateStr(now);
-  const days: { date: string; dayName: string; dayNum: number; isWeekend: boolean; isToday: boolean }[] = [];
+  const days: { date: string; dayName: string; dayNum: number; dow: number; isWeekend: boolean; isToday: boolean }[] = [];
   for (let d = 1; d <= numDays; d++) {
     const dateObj = new Date(year, month, d);
     const dateStr = toDateStr(dateObj);
     const dow = dateObj.getDay();
-    days.push({
-      date: dateStr,
-      dayName: DAY_NAMES[dow],
-      dayNum: d,
-      isWeekend: dow === 0 || dow === 6,
-      isToday: dateStr === today,
-    });
+    days.push({ date: dateStr, dayName: DAY_NAMES[dow], dayNum: d, dow, isWeekend: dow === 0 || dow === 6, isToday: dateStr === today });
   }
 
   return (
@@ -235,39 +295,77 @@ export default function ManagersRosterPage() {
       subtitle="Set manager schedules — changes auto-apply to the main roster"
     >
       {/* Controls */}
-      <div className="flex flex-wrap items-center gap-3 mb-6">
-        <select
-          className="rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
-          value={selectedBranch}
-          onChange={(e) => setSelectedBranch(e.target.value)}
-        >
-          {branches.map((b) => (
-            <option key={b.id} value={b.id}>{b.name}</option>
-          ))}
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <select className="rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white" value={selectedBranch} onChange={(e) => setSelectedBranch(e.target.value)}>
+          {branches.map((b) => (<option key={b.id} value={b.id}>{b.name}</option>))}
         </select>
-
-        <select
-          className="rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
-          value={month}
-          onChange={(e) => setMonth(Number(e.target.value))}
-        >
-          {monthNames.map((name, i) => (
-            <option key={i} value={i}>{name}</option>
-          ))}
+        <select className="rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white" value={month} onChange={(e) => setMonth(Number(e.target.value))}>
+          {monthNames.map((name, i) => (<option key={i} value={i}>{name}</option>))}
         </select>
-
-        <select
-          className="rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white"
-          value={year}
-          onChange={(e) => setYear(Number(e.target.value))}
-        >
-          {[2025, 2026, 2027].map((y) => (
-            <option key={y} value={y}>{y}</option>
-          ))}
+        <select className="rounded-lg border border-gray-200 px-3 py-2 text-sm bg-white" value={year} onChange={(e) => setYear(Number(e.target.value))}>
+          {[2025, 2026, 2027].map((y) => (<option key={y} value={y}>{y}</option>))}
         </select>
+        <div className="flex-1" />
+        {managers.length > 0 && (
+          <Button variant="secondary" size="sm" onClick={() => { setShowPrefill(!showPrefill); if (!prefillMgr && managers.length > 0) setPrefillMgr(managers[0].id); }}>
+            <Copy size={14} />
+            Pre-fill Month
+          </Button>
+        )}
       </div>
 
-      {/* No managers message */}
+      {/* Pre-fill panel */}
+      {showPrefill && (
+        <div className="mb-4 rounded-xl border border-purple-200 bg-purple-50 p-4">
+          <h3 className="text-sm font-bold text-purple-700 mb-3">Pre-fill Weekly Pattern</h3>
+          <div className="flex flex-wrap items-end gap-3 mb-3">
+            <div>
+              <label className="block text-[10px] font-semibold text-purple-500 uppercase mb-1">Manager</label>
+              <select className="rounded border border-purple-200 px-2 py-1.5 text-sm bg-white" value={prefillMgr} onChange={(e) => setPrefillMgr(e.target.value)}>
+                {managers.map((m) => (<option key={m.id} value={m.id}>{m.first_name} {m.last_name}</option>))}
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-7 gap-2 mb-3">
+            {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((dayLabel, i) => {
+              const dow = i === 6 ? 0 : i + 1; // Mon=1, Tue=2, ..., Sun=0
+              const pat = prefillPattern[dow];
+              return (
+                <div key={dayLabel} className="text-center">
+                  <span className={`block text-[10px] font-bold uppercase mb-1 ${dow === 0 || dow === 6 ? "text-orange-500" : "text-purple-600"}`}>{dayLabel}</span>
+                  <select
+                    className="w-full text-[11px] border border-purple-200 rounded px-1 py-1 bg-white"
+                    value={pat ? `${pat.start}-${pat.end}` : "off"}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === "off") {
+                        setPrefillPattern((prev) => { const n = { ...prev }; delete n[dow]; return n; });
+                      } else {
+                        const [s, en] = val.split("-");
+                        setPrefillPattern((prev) => ({ ...prev, [dow]: { start: s, end: en } }));
+                      }
+                    }}
+                  >
+                    <option value="off">OFF</option>
+                    <option value="08:00-20:00">08:00–20:00</option>
+                    <option value="08:00-14:00">08:00–14:00</option>
+                    <option value="14:00-20:00">14:00–20:00</option>
+                    <option value="06:00-14:00">06:00–14:00</option>
+                    <option value="06:00-18:00">06:00–18:00</option>
+                  </select>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" onClick={applyPrefill} disabled={bulkSaving}>
+              {bulkSaving ? <><Loader2 size={14} className="animate-spin" /> Applying...</> : <>Apply to {monthNames[month]}</>}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setShowPrefill(false)}>Cancel</Button>
+          </div>
+        </div>
+      )}
+
       {!loading && managers.length === 0 && (
         <div className="text-center py-12 text-gray-400">
           <p className="text-lg font-medium mb-2">No managers found</p>
@@ -275,7 +373,6 @@ export default function ManagersRosterPage() {
         </div>
       )}
 
-      {/* Loading */}
       {loading && (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="animate-spin text-purple-500" size={24} />
@@ -288,20 +385,11 @@ export default function ManagersRosterPage() {
           <table className="w-full text-sm">
             <thead className="sticky top-0 z-10">
               <tr className="bg-purple-600 text-white">
-                <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider w-[50px]">Date</th>
-                <th className="px-2 py-2.5 text-left text-xs font-semibold uppercase tracking-wider w-[50px]">Day</th>
+                <th className="px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider w-[45px]">Date</th>
+                <th className="px-2 py-2.5 text-left text-xs font-semibold uppercase tracking-wider w-[40px]">Day</th>
                 {managers.map((mgr) => (
-                  <th key={mgr.id} colSpan={2} className="px-2 py-2.5 text-center text-xs font-semibold uppercase tracking-wider">
-                    {mgr.first_name} {mgr.last_name?.[0]}.
-                  </th>
-                ))}
-              </tr>
-              <tr className="bg-purple-500/90 text-white/80">
-                <th className="px-3 py-1" />
-                <th className="px-2 py-1" />
-                {managers.map((mgr) => (
-                  <th key={`${mgr.id}-sub`} colSpan={2} className="px-2 py-1 text-[10px] font-normal tracking-wide">
-                    Start – End
+                  <th key={mgr.id} className="px-3 py-2.5 text-center text-xs font-semibold uppercase tracking-wider min-w-[200px]">
+                    {mgr.first_name} {mgr.last_name}
                   </th>
                 ))}
               </tr>
@@ -310,64 +398,79 @@ export default function ManagersRosterPage() {
               {days.map((day) => (
                 <tr
                   key={day.date}
-                  className={`border-b border-gray-100 transition-colors ${
-                    day.isToday ? "bg-purple-50 font-semibold" : day.isWeekend ? "bg-gray-50/50" : "bg-white"
-                  } hover:bg-purple-50/30`}
+                  className={`border-b border-gray-100 ${
+                    day.isToday ? "bg-purple-50 ring-1 ring-inset ring-purple-300" : day.isWeekend ? "bg-orange-50/30" : "bg-white"
+                  } hover:bg-purple-50/20`}
                 >
-                  <td className="px-3 py-1.5 text-xs font-mono text-gray-600">{day.dayNum}</td>
-                  <td className={`px-2 py-1.5 text-xs font-medium ${day.isWeekend ? "text-orange-500" : "text-gray-500"}`}>
+                  <td className={`px-3 py-1 text-xs font-mono ${day.isToday ? "font-bold text-purple-700" : "text-gray-500"}`}>
+                    {day.dayNum}
+                  </td>
+                  <td className={`px-2 py-1 text-xs font-semibold ${day.isWeekend ? "text-orange-500" : day.isToday ? "text-purple-600" : "text-gray-400"}`}>
                     {day.dayName}
                   </td>
                   {managers.map((mgr) => {
                     const key = `${day.date}_${mgr.id}`;
                     const cell = grid[key];
-                    const isSaving = saving === key;
-                    const isSaved = saved === key;
+                    const isSaving = saving.has(key);
+                    const isSaved = saved.has(key);
 
-                    if (!cell) return <td key={mgr.id} colSpan={2} />;
-
-                    if (cell.isLeave) {
-                      return (
-                        <td key={mgr.id} colSpan={2} className="px-2 py-1 text-center">
-                          <button
-                            onClick={() => toggleLeave(day.date, mgr.id)}
-                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-700 text-[10px] font-bold uppercase tracking-wide hover:bg-amber-200 transition-colors"
-                          >
-                            LEAVE
-                            {isSaving && <Loader2 size={10} className="animate-spin" />}
-                            {isSaved && <Check size={10} className="text-green-600" />}
-                          </button>
-                        </td>
-                      );
-                    }
+                    if (!cell) return <td key={mgr.id} />;
 
                     return (
-                      <td key={mgr.id} colSpan={2} className="px-1 py-0.5">
-                        <div className="flex items-center gap-0.5">
-                          <input
-                            type="time"
-                            className="w-[72px] text-xs border border-gray-200 rounded px-1 py-0.5 bg-white focus:ring-1 focus:ring-purple-300 focus:border-purple-400 outline-none"
-                            value={cell.start}
-                            onChange={(e) => updateCell(day.date, mgr.id, "start", e.target.value)}
-                            onBlur={() => { if (cell.start && cell.end) handleCellSave(day.date, mgr.id); }}
-                          />
-                          <span className="text-gray-300 text-[10px]">–</span>
-                          <input
-                            type="time"
-                            className="w-[72px] text-xs border border-gray-200 rounded px-1 py-0.5 bg-white focus:ring-1 focus:ring-purple-300 focus:border-purple-400 outline-none"
-                            value={cell.end}
-                            onChange={(e) => updateCell(day.date, mgr.id, "end", e.target.value)}
-                            onBlur={() => { if (cell.start && cell.end) handleCellSave(day.date, mgr.id); }}
-                          />
+                      <td key={mgr.id} className="px-2 py-0.5">
+                        <div className="flex items-center gap-1">
+                          {/* Quick shift buttons */}
+                          {QUICK_SHIFTS.map((qs) => {
+                            const isActive = cell.start === qs.start && cell.end === qs.end && !cell.isLeave;
+                            return (
+                              <button
+                                key={qs.label}
+                                onClick={() => applyQuickShift(day.date, mgr.id, qs.start, qs.end)}
+                                className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all ${
+                                  isActive
+                                    ? "bg-purple-600 text-white shadow-sm"
+                                    : "bg-gray-100 text-gray-500 hover:bg-purple-100 hover:text-purple-600"
+                                }`}
+                                title={`${qs.start}–${qs.end}`}
+                              >
+                                {qs.label}
+                              </button>
+                            );
+                          })}
+
+                          {/* Leave button */}
                           <button
                             onClick={() => toggleLeave(day.date, mgr.id)}
-                            className="text-[8px] text-gray-400 hover:text-amber-600 px-0.5"
-                            title="Mark as leave"
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all ${
+                              cell.isLeave
+                                ? "bg-amber-500 text-white"
+                                : "bg-gray-100 text-gray-400 hover:bg-amber-100 hover:text-amber-600"
+                            }`}
                           >
-                            L
+                            Leave
                           </button>
-                          {isSaving && <Loader2 size={10} className="animate-spin text-purple-500" />}
-                          {isSaved && <Check size={10} className="text-green-500" />}
+
+                          {/* Clear */}
+                          {(cell.start || cell.end || cell.isLeave) && (
+                            <button
+                              onClick={() => clearCell(day.date, mgr.id)}
+                              className="text-gray-300 hover:text-red-400 transition-colors ml-0.5"
+                              title="Clear"
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          )}
+
+                          {/* Status indicator */}
+                          {isSaving && <Loader2 size={11} className="animate-spin text-purple-400 ml-0.5" />}
+                          {isSaved && <Check size={11} className="text-green-500 ml-0.5" />}
+
+                          {/* Time display */}
+                          {cell.start && cell.end && !cell.isLeave && (
+                            <span className="text-[10px] font-mono text-purple-500 ml-1">
+                              {cell.start}–{cell.end}
+                            </span>
+                          )}
                         </div>
                       </td>
                     );
@@ -375,21 +478,25 @@ export default function ManagersRosterPage() {
                 </tr>
               ))}
             </tbody>
-            {/* Footer: Total hours */}
             <tfoot>
-              <tr className="bg-purple-50 border-t-2 border-purple-200 font-semibold">
-                <td className="px-3 py-2 text-xs text-purple-700" colSpan={2}>Total Hours</td>
+              <tr className="bg-purple-50 border-t-2 border-purple-200">
+                <td className="px-3 py-2 text-xs font-bold text-purple-700" colSpan={2}>Total Hours</td>
                 {managers.map((mgr) => {
-                  let total = 0;
+                  let totalHrs = 0;
+                  let leaveDays = 0;
+                  let workDays = 0;
                   days.forEach((day) => {
                     const cell = grid[`${day.date}_${mgr.id}`];
-                    if (cell && !cell.isLeave && cell.start && cell.end) {
-                      total += calcHours(cell.start, cell.end);
+                    if (cell?.isLeave) leaveDays++;
+                    else if (cell?.start && cell?.end) {
+                      totalHrs += calcHours(cell.start, cell.end);
+                      workDays++;
                     }
                   });
                   return (
-                    <td key={mgr.id} colSpan={2} className="px-2 py-2 text-center text-xs font-bold text-purple-700">
-                      {Math.round(total)}h
+                    <td key={mgr.id} className="px-3 py-2 text-center text-xs text-purple-700">
+                      <span className="font-bold">{Math.round(totalHrs)}h</span>
+                      <span className="text-purple-400 ml-1">({workDays}d work · {leaveDays}d leave)</span>
                     </td>
                   );
                 })}
