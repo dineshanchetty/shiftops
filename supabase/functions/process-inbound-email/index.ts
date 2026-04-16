@@ -4,53 +4,115 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 /**
  * Process Inbound Email — Edge Function
  *
- * SendGrid Inbound Parse webhook. Handles Aura daily report PDFs.
+ * Handles Aura daily report pack via SendGrid Inbound Parse.
  *
  * Flow:
  *   1. Extract +tag from recipient → lookup branch by email_code
- *   2. Iterate PDF attachments
- *   3. Primary PDF (Shop Cashup Summary) → OpenAI extracts key figures → upsert daily_cashups
- *   4. All other PDFs → save to cashup_documents linked to the cashup
+ *   2. Find Shop Cashup Summary PDF → extract via OpenAI → upsert daily_cashups (source of truth)
+ *   3. For each supporting PDF, extract its key figure and cross-validate against cashup
+ *   4. Store all PDFs in cashup_documents with verification_status
  */
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY")!;
 
-// Doc type classification based on filename keywords
-function classifyDocType(filename: string): { isCashupSummary: boolean; docType: string } {
+// Tolerance for variance checks (R5 for cash, larger for sales totals)
+const CASH_TOLERANCE = 5.0;
+const SALES_TOLERANCE = 10.0;
+
+// ─── Report type classification ──────────────────────────────────────────────
+
+type ReportType =
+  | "cashup_summary"
+  | "cashup_detail"
+  | "discounts"
+  | "overring"
+  | "sales_by_hour"
+  | "item_sales"
+  | "stock_variance"
+  | "stock_transfers"
+  | "kitchen_speed"
+  | "cc_batch"
+  | "banking_slip"
+  | "scan"
+  | "other";
+
+interface ReportTypeInfo {
+  type: ReportType;
+  /** Which cashup field (if any) this report validates */
+  validatesField: "gross_turnover" | "discounts" | "credit_cards" | "cash_banked" | "debtors" | null;
+  /** doc_type for cashup_documents table */
+  docType: "cc_batch" | "banking_slip" | "cashup_summary" | "stock_report" | "other";
+}
+
+function classifyReport(filename: string): ReportTypeInfo {
   const f = filename.toLowerCase();
-  if (f.includes("cashup summary") || f.includes("cashup_summary")) return { isCashupSummary: true, docType: "cashup_summary" };
-  if (f.includes("cashup detail") || f.includes("cashup_detail")) return { isCashupSummary: false, docType: "cashup_summary" };
-  if (f.includes("discount")) return { isCashupSummary: false, docType: "other" };
-  if (f.includes("overring") || f.includes("over ring")) return { isCashupSummary: false, docType: "other" };
-  if (f.includes("stock")) return { isCashupSummary: false, docType: "stock_report" };
-  if (f.includes("cc batch") || f.includes("credit card")) return { isCashupSummary: false, docType: "cc_batch" };
-  if (f.includes("banking") || f.includes("deposit slip")) return { isCashupSummary: false, docType: "banking_slip" };
-  return { isCashupSummary: false, docType: "other" };
+  if (f.includes("cashup summary") || f.includes("cashup_summary"))
+    return { type: "cashup_summary", validatesField: null, docType: "cashup_summary" };
+  if (f.includes("cashup detail"))
+    return { type: "cashup_detail", validatesField: null, docType: "cashup_summary" };
+  if (f.includes("discount"))
+    return { type: "discounts", validatesField: "discounts", docType: "other" };
+  if (f.includes("overring") || f.includes("over ring") || f.includes("over_ring"))
+    return { type: "overring", validatesField: null, docType: "other" }; // no cashup field for this
+  if (f.includes("sales by hour"))
+    return { type: "sales_by_hour", validatesField: "gross_turnover", docType: "other" };
+  if (f.includes("item sales"))
+    return { type: "item_sales", validatesField: "gross_turnover", docType: "other" };
+  if (f.includes("stock variance"))
+    return { type: "stock_variance", validatesField: null, docType: "stock_report" };
+  if (f.includes("stock transfer"))
+    return { type: "stock_transfers", validatesField: null, docType: "stock_report" };
+  if (f.includes("kitchen speed") || f.includes("kitchen_speed"))
+    return { type: "kitchen_speed", validatesField: null, docType: "other" };
+  if (f.includes("cc batch") || f.includes("credit card") || f.includes("card batch"))
+    return { type: "cc_batch", validatesField: "credit_cards", docType: "cc_batch" };
+  if (f.includes("banking") || f.includes("deposit") || f.includes("slip"))
+    return { type: "banking_slip", validatesField: "cash_banked", docType: "banking_slip" };
+  if (f.includes("scan"))
+    return { type: "scan", validatesField: null, docType: "other" }; // manual scans
+  return { type: "other", validatesField: null, docType: "other" };
 }
 
-async function parseCashupPdfWithAI(base64Pdf: string, filename: string): Promise<Record<string, number | string | null> | null> {
-  const prompt = `You are analyzing a "Shop Cashup Summary" PDF from the Aura POS system for a Debonairs Pizza franchise.
+// ─── AI extraction prompts ───────────────────────────────────────────────────
 
-Extract these specific fields and return ONLY valid JSON:
+const CASHUP_SUMMARY_PROMPT = `You are analyzing a "Shop Cashup Summary" PDF from the Aura POS system for a Debonairs Pizza franchise.
+
+Extract these fields and return ONLY valid JSON:
 {
-  "date": "YYYY-MM-DD (from report header)",
-  "gross_turnover": <Gross Sales (Ex. O/R) amount>,
-  "discounts": <LESS Discounts amount>,
-  "delivery_charges": <ADD Delivery Charges amount>,
-  "credit_cards": <Credit Cards amount>,
-  "cash_banked": <Cash to be banked amount OR Cash amount>,
-  "debtors": <Debtors amount>,
-  "online_orders": <Online Orders amount (may be ignored)>,
-  "other_payments": <Other Payments amount>,
-  "overrings": <Overrings amount>,
-  "confidence": "high" | "medium" | "low"
+  "date": "YYYY-MM-DD (from report header, e.g. 'Monday the 13 April, 2026')",
+  "gross_turnover": <"Gross Sales (Ex. O/R)" amount>,
+  "discounts": <"LESS Discounts" amount>,
+  "delivery_charges": <"ADD Delivery Charges" amount>,
+  "credit_cards": <"Credit Cards" amount>,
+  "cash_banked": <"Cash to be banked" amount, or "Cash" if first missing>,
+  "debtors": <"Debtors" amount>
+}
+All amounts in ZAR. Use 0 if a field shows 0.00. Use null if not present.`;
+
+const SUPPORTING_REPORT_PROMPTS: Partial<Record<ReportType, string>> = {
+  discounts: `You are analyzing a "Discounts Summary" PDF from Aura POS. Extract the TOTAL discount amount for the day. Return JSON: { "total": <number>, "breakdown": {...} }`,
+  overring: `You are analyzing an "Overring Summary" PDF from Aura POS. Extract the TOTAL overring amount for the day. Return JSON: { "total": <number>, "count": <number> }`,
+  sales_by_hour: `You are analyzing a "Sales by Hour by Report Group" PDF from Aura POS. Extract the GRAND TOTAL sales across all hours. Return JSON: { "total": <number> }`,
+  item_sales: `You are analyzing an "Item Sales by Report Group" PDF from Aura POS. Extract the GRAND TOTAL sales value. Return JSON: { "total": <number> }`,
+  stock_variance: `You are analyzing a "Stock Variance" PDF from Aura POS. Extract the total variance amount (positive or negative). Return JSON: { "total": <number> }`,
+  cc_batch: `You are analyzing a credit card batch settlement report. Extract the TOTAL credit card amount processed. Return JSON: { "total": <number> }`,
+  banking_slip: `You are analyzing a bank deposit slip. Extract the TOTAL deposit amount. Return JSON: { "total": <number> }`,
+  scan: `You are analyzing a scanned document (possibly a CC batch slip, banking slip, or cashup summary). Extract any monetary total you can find. Return JSON: { "total": <number>, "description": "<what the document appears to be>" }`,
+};
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+async function fileToBase64(file: File | Blob): Promise<string> {
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
 }
 
-All amounts in South African Rands. Use 0 if a field is explicitly 0.00. Use null if a field is not present.
-Date should be parsed from "From DD Month, YYYY" or "for Monday the DD Month, YYYY" in the report.`;
-
+async function callOpenAIPDF(base64Pdf: string, filename: string, prompt: string): Promise<Record<string, unknown> | null> {
   try {
     const resp = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -66,13 +128,7 @@ Date should be parsed from "From DD Month, YYYY" or "for Monday the DD Month, YY
           {
             role: "user",
             content: [
-              {
-                type: "file",
-                file: {
-                  filename,
-                  file_data: `data:application/pdf;base64,${base64Pdf}`,
-                },
-              },
+              { type: "file", file: { filename, file_data: `data:application/pdf;base64,${base64Pdf}` } },
               { type: "text", text: prompt },
             ],
           },
@@ -81,14 +137,12 @@ Date should be parsed from "From DD Month, YYYY" or "for Monday the DD Month, YY
     });
 
     if (!resp.ok) {
-      const errText = await resp.text();
-      console.error("OpenAI PDF parse failed:", resp.status, errText);
+      console.error("OpenAI PDF failed:", resp.status, await resp.text());
       return null;
     }
 
     const data = await resp.json();
     const content = data.choices?.[0]?.message?.content ?? "";
-    console.log("AI raw response:", content.slice(0, 300));
     return JSON.parse(content);
   } catch (err) {
     console.error("AI parse error:", err);
@@ -96,14 +150,26 @@ Date should be parsed from "From DD Month, YYYY" or "for Monday the DD Month, YY
   }
 }
 
-// Helper to convert File/Blob to base64
-async function fileToBase64(file: File | Blob): Promise<string> {
-  const buf = await file.arrayBuffer();
-  const bytes = new Uint8Array(buf);
-  let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
+function toNum(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const n = typeof v === "number" ? v : parseFloat(String(v).replace(/[^0-9.-]/g, ""));
+  return isNaN(n) ? null : n;
 }
+
+function computeVariance(reportValue: number | null, cashupValue: number | null, tolerance: number): {
+  status: "pending" | "verified" | "mismatch";
+  variance: number | null;
+} {
+  if (reportValue === null || cashupValue === null) return { status: "pending", variance: null };
+  const diff = reportValue - cashupValue;
+  const absDiff = Math.abs(diff);
+  return {
+    status: absDiff <= tolerance ? "verified" : "mismatch",
+    variance: absDiff <= tolerance ? 0 : diff,
+  };
+}
+
+// ─── Main handler ────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
   const corsHeaders = {
@@ -127,19 +193,16 @@ Deno.serve(async (req: Request) => {
     const toAddress = formData.get("to")?.toString() ?? "";
     const numAttachments = parseInt(formData.get("attachments")?.toString() ?? "0");
 
-    console.log(`Inbound: from=${from}, to=${toAddress}, subject="${subject}", attachments=${numAttachments}`);
+    console.log(`Inbound: from=${from}, to=${toAddress}, attachments=${numAttachments}`);
 
-    // Extract +tag from recipient
     const codeMatch = toAddress.match(/\+([a-z0-9]+)@/i);
     const emailCode = codeMatch?.[1]?.toLowerCase();
-
     if (!emailCode) {
-      return new Response(JSON.stringify({
-        success: false, error: "Recipient missing branch code",
-      }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ success: false, error: "Missing branch code" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    // Look up branch
     const { data: branch } = await supabase
       .from("branches")
       .select("id, name, tenant_id")
@@ -147,15 +210,14 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
 
     if (!branch) {
-      return new Response(JSON.stringify({
-        success: false, error: `No branch found for code '${emailCode}'`,
-      }), { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ success: false, error: `No branch for code ${emailCode}` }), {
+        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    console.log(`Matched branch: ${branch.name} (${branch.id})`);
+    console.log(`Branch: ${branch.name} (${branch.id})`);
 
     if (numAttachments === 0) {
-      console.log("No attachments");
       return new Response(JSON.stringify({ success: true, message: "No attachments" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -168,8 +230,8 @@ Deno.serve(async (req: Request) => {
       try { attachmentInfo = JSON.parse(attachmentInfoStr); } catch { /* ignore */ }
     }
 
-    // Collect all PDF attachments
-    const pdfs: { filename: string; base64: string; size: number; file: File | Blob }[] = [];
+    // Collect PDFs
+    const pdfs: { filename: string; base64: string; size: number; info: ReportTypeInfo }[] = [];
     for (let i = 1; i <= numAttachments; i++) {
       const att = formData.get(`attachment${i}`);
       if (!att || typeof att === "string") continue;
@@ -178,140 +240,191 @@ Deno.serve(async (req: Request) => {
       const ctype = info?.type ?? "";
       if (filename.toLowerCase().endsWith(".pdf") || ctype.includes("pdf")) {
         const b64 = await fileToBase64(att);
-        pdfs.push({ filename, base64: b64, size: (att as Blob).size, file: att });
+        pdfs.push({
+          filename,
+          base64: b64,
+          size: (att as Blob).size,
+          info: classifyReport(filename),
+        });
       }
     }
 
-    console.log(`Found ${pdfs.length} PDF attachment(s)`);
+    console.log(`PDFs: ${pdfs.map(p => `${p.filename} → ${p.info.type}`).join(", ")}`);
 
     if (pdfs.length === 0) {
+      return new Response(JSON.stringify({ success: false, error: "No PDFs found" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // ── Step 1: Parse Shop Cashup Summary (source of truth) ──
+    const summaryPdf = pdfs.find((p) => p.info.type === "cashup_summary");
+    let cashupDate: string | null = null;
+    let cashupId: string | null = null;
+    let cashupFields: Record<string, number | null> = {};
+
+    if (!summaryPdf) {
+      console.warn("No Shop Cashup Summary PDF — cannot proceed");
       return new Response(JSON.stringify({
-        success: false, error: "No PDF attachments found",
+        success: false,
+        error: "Daily pack missing Shop Cashup Summary PDF",
       }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // Find the Shop Cashup Summary PDF (primary for extracting cashup figures)
-    const summaryPdf = pdfs.find((p) => classifyDocType(p.filename).isCashupSummary);
+    console.log(`Parsing cashup summary: ${summaryPdf.filename}`);
+    const aiFields = await callOpenAIPDF(summaryPdf.base64, summaryPdf.filename, CASHUP_SUMMARY_PROMPT);
 
-    let cashupDate: string | null = null;
-    let cashupId: string | null = null;
-    let aiFields: Record<string, number | string | null> | null = null;
+    if (!aiFields || !aiFields.date) {
+      console.error("AI failed to extract cashup summary");
+      return new Response(JSON.stringify({ success: false, error: "AI extraction failed" }), {
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
-    if (summaryPdf) {
-      console.log(`Parsing cashup summary: ${summaryPdf.filename}`);
-      aiFields = await parseCashupPdfWithAI(summaryPdf.base64, summaryPdf.filename);
+    cashupDate = String(aiFields.date);
+    cashupFields = {
+      gross_turnover: toNum(aiFields.gross_turnover),
+      discounts: toNum(aiFields.discounts),
+      delivery_charges: toNum(aiFields.delivery_charges),
+      credit_cards: toNum(aiFields.credit_cards),
+      cash_banked: toNum(aiFields.cash_banked),
+      debtors: toNum(aiFields.debtors),
+    };
 
-      if (aiFields && aiFields.date) {
-        cashupDate = String(aiFields.date);
+    // Create aura_imports record
+    const { data: importRec } = await supabase
+      .from("aura_imports")
+      .insert({
+        tenant_id: branch.tenant_id,
+        branch_id: branch.id,
+        source_file: summaryPdf.filename,
+        import_date: cashupDate,
+        status: "processing",
+        raw_data: { ...aiFields, email_sender: from, email_subject: subject, pdf_count: pdfs.length },
+      })
+      .select("id")
+      .single();
 
-        // Build cashup data
-        const cashupData: Record<string, number | null> = {};
-        const num = (v: unknown): number | null => {
-          if (v === null || v === undefined || v === "") return null;
-          const n = typeof v === "number" ? v : parseFloat(String(v).replace(/[^0-9.-]/g, ""));
-          return isNaN(n) ? null : n;
-        };
-        cashupData.gross_turnover = num(aiFields.gross_turnover);
-        cashupData.discounts = num(aiFields.discounts);
-        cashupData.delivery_charges = num(aiFields.delivery_charges);
-        cashupData.credit_cards = num(aiFields.credit_cards);
-        cashupData.cash_banked = num(aiFields.cash_banked);
-        cashupData.debtors = num(aiFields.debtors);
+    // Upsert daily_cashup
+    const { data: existing } = await supabase
+      .from("daily_cashups")
+      .select("id")
+      .eq("branch_id", branch.id)
+      .eq("date", cashupDate)
+      .maybeSingle();
 
-        // Create aura_imports record
-        const { data: importRec } = await supabase
-          .from("aura_imports")
-          .insert({
-            tenant_id: branch.tenant_id,
-            branch_id: branch.id,
-            source_file: summaryPdf.filename,
-            import_date: cashupDate,
-            status: "processing",
-            raw_data: { ...aiFields, email_sender: from, email_subject: subject },
-          })
-          .select("id")
-          .single();
-
-        // Upsert daily_cashup
-        const { data: existing } = await supabase
-          .from("daily_cashups")
-          .select("id")
-          .eq("branch_id", branch.id)
-          .eq("date", cashupDate)
-          .maybeSingle();
-
-        let cashupErr: { message: string } | null = null;
-        if (existing) {
-          const { error } = await supabase
-            .from("daily_cashups")
-            .update({ ...cashupData, aura_import_id: importRec?.id })
-            .eq("id", existing.id);
-          cashupErr = error;
-          cashupId = existing.id;
-        } else {
-          const { data: newC, error } = await supabase
-            .from("daily_cashups")
-            .insert({
-              tenant_id: branch.tenant_id,
-              branch_id: branch.id,
-              date: cashupDate,
-              status: "imported",
-              aura_import_id: importRec?.id,
-              ...cashupData,
-            })
-            .select("id")
-            .single();
-          cashupErr = error;
-          cashupId = newC?.id ?? null;
-        }
-
-        if (importRec) {
-          await supabase.from("aura_imports")
-            .update({
-              status: cashupErr ? "failed" : "completed",
-              parsed_at: new Date().toISOString(),
-              error_log: cashupErr?.message,
-            })
-            .eq("id", importRec.id);
-        }
-
-        console.log(`Cashup ${existing ? "updated" : "created"}: ${cashupId} for ${cashupDate}`);
-      } else {
-        console.error("AI did not extract date from cashup summary");
-      }
+    if (existing) {
+      const { error } = await supabase
+        .from("daily_cashups")
+        .update({ ...cashupFields, aura_import_id: importRec?.id })
+        .eq("id", existing.id);
+      if (error) console.error("Update cashup failed:", error.message);
+      cashupId = existing.id;
     } else {
-      console.log("No Shop Cashup Summary PDF found in attachments");
+      const { data: newC, error } = await supabase
+        .from("daily_cashups")
+        .insert({
+          tenant_id: branch.tenant_id,
+          branch_id: branch.id,
+          date: cashupDate,
+          status: "imported",
+          aura_import_id: importRec?.id,
+          ...cashupFields,
+        })
+        .select("id")
+        .single();
+      if (error) console.error("Insert cashup failed:", error.message);
+      cashupId = newC?.id ?? null;
     }
 
-    // Save all OTHER PDFs as supporting documents (if we have a cashupId)
-    let savedDocs = 0;
-    if (cashupId) {
-      for (const pdf of pdfs) {
-        if (pdf === summaryPdf) continue; // already processed
-        const { docType } = classifyDocType(pdf.filename);
-        const { error } = await supabase.from("cashup_documents").insert({
-          cashup_id: cashupId,
-          tenant_id: branch.tenant_id,
-          doc_type: docType,
-          file_name: pdf.filename,
-          file_data: `data:application/pdf;base64,${pdf.base64}`,
-          file_size: pdf.size,
-          verification_status: "pending",
-        });
-        if (!error) savedDocs++;
-        else console.error(`Failed to save ${pdf.filename}:`, error.message);
-      }
-      console.log(`Saved ${savedDocs} supporting documents`);
+    if (importRec) {
+      await supabase.from("aura_imports")
+        .update({ status: "completed", parsed_at: new Date().toISOString() })
+        .eq("id", importRec.id);
     }
+
+    console.log(`Cashup saved: ${cashupId} for ${cashupDate}`);
+
+    if (!cashupId) {
+      return new Response(JSON.stringify({ success: false, error: "Failed to save cashup" }), {
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // ── Step 2: Save ALL PDFs to cashup_documents + cross-validate ──
+    const validations: Array<{ filename: string; type: ReportType; extracted: number | null; cashupValue: number | null; status: string; variance: number | null }> = [];
+
+    for (const pdf of pdfs) {
+      const isCashupSummary = pdf === summaryPdf;
+      const prompt = isCashupSummary ? null : SUPPORTING_REPORT_PROMPTS[pdf.info.type];
+      let extractedData: Record<string, unknown> | null = null;
+      let extractedTotal: number | null = null;
+      let verificationStatus: "pending" | "verified" | "mismatch" = "pending";
+      let variance: number | null = null;
+
+      // Extract figure from supporting report (skip re-parsing the summary)
+      if (prompt) {
+        extractedData = await callOpenAIPDF(pdf.base64, pdf.filename, prompt);
+        extractedTotal = toNum(extractedData?.total);
+
+        // Cross-validate against cashup field
+        if (pdf.info.validatesField && extractedTotal !== null) {
+          const cashupValue = cashupFields[pdf.info.validatesField];
+          const isSales = pdf.info.validatesField === "gross_turnover";
+          const tolerance = isSales ? SALES_TOLERANCE : CASH_TOLERANCE;
+          const result = computeVariance(extractedTotal, cashupValue, tolerance);
+          verificationStatus = result.status;
+          variance = result.variance;
+        }
+
+        validations.push({
+          filename: pdf.filename,
+          type: pdf.info.type,
+          extracted: extractedTotal,
+          cashupValue: pdf.info.validatesField ? cashupFields[pdf.info.validatesField] : null,
+          status: verificationStatus,
+          variance,
+        });
+      }
+
+      // Build parsed_data metadata
+      const parsedData: Record<string, unknown> = isCashupSummary
+        ? { source: "email", report_type: pdf.info.type, extracted_fields: cashupFields }
+        : (extractedData ?? {});
+      if (pdf.info.validatesField) parsedData.validates_field = pdf.info.validatesField;
+      if (extractedTotal !== null) parsedData.extracted_total = extractedTotal;
+      parsedData.report_type = pdf.info.type;
+      parsedData.email_sender = from;
+
+      // Summary PDF is auto-verified (it's the source of truth)
+      const finalStatus = isCashupSummary ? "verified" : verificationStatus;
+
+      const { error } = await supabase.from("cashup_documents").insert({
+        cashup_id: cashupId,
+        tenant_id: branch.tenant_id,
+        doc_type: pdf.info.docType,
+        file_name: pdf.filename,
+        file_data: `data:application/pdf;base64,${pdf.base64}`,
+        file_size: pdf.size,
+        parsed_data: parsedData,
+        verification_status: finalStatus,
+        variance_amount: isCashupSummary ? 0 : variance,
+      });
+
+      if (error) console.error(`Failed to save ${pdf.filename}:`, error.message);
+      else console.log(`Saved: ${pdf.filename} (${pdf.info.type}, ${finalStatus})`);
+    }
+
+    console.log(`Processed ${pdfs.length} documents (${validations.length} validations)`);
 
     return new Response(JSON.stringify({
       success: true,
       branch: branch.name,
       cashup_date: cashupDate,
       cashup_id: cashupId,
-      ai_extracted: aiFields,
-      supporting_docs_saved: savedDocs,
+      cashup_fields: cashupFields,
       total_pdfs: pdfs.length,
+      validations,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
   } catch (err) {
     console.error("Inbound email error:", err);

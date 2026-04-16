@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import {
@@ -11,6 +11,8 @@ import {
   Clock,
   Trash2,
   AlertTriangle,
+  Eye,
+  Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -147,6 +149,74 @@ export function DocumentUpload({
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // Load existing documents from DB when cashupId becomes available
+  useEffect(() => {
+    if (!cashupId) return;
+    (async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as any)
+        .from("cashup_documents")
+        .select("id, cashup_id, tenant_id, doc_type, file_name, file_size, verification_status, variance_amount, notes, parsed_data")
+        .eq("cashup_id", cashupId)
+        .order("created_at", { ascending: true });
+      if (error) {
+        console.error("Failed to load documents:", error.message);
+        return;
+      }
+      const loaded: DocumentRecord[] = (data ?? []).map((d: Record<string, unknown>) => ({
+        id: d.id as string,
+        cashup_id: d.cashup_id as string | null,
+        tenant_id: d.tenant_id as string | null,
+        doc_type: d.doc_type as DocType,
+        file_name: d.file_name as string,
+        file_size: d.file_size as number | null,
+        verification_status: d.verification_status as VerificationStatus,
+        variance_amount: d.variance_amount as number | null,
+        notes: d.notes as string | null,
+        entered_total: (d.parsed_data as { entered_total?: number; extracted_total?: number } | null)?.entered_total
+          ?? (d.parsed_data as { extracted_total?: number } | null)?.extracted_total
+          ?? null,
+      }));
+      setDocuments(loaded);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cashupId]);
+
+  // Open a document — fetch file_data on demand
+  async function handleView(docId: string) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any)
+      .from("cashup_documents")
+      .select("file_data, file_name")
+      .eq("id", docId)
+      .single();
+    if (error || !data?.file_data) {
+      console.error("Failed to load file:", error?.message);
+      return;
+    }
+    // file_data is stored as data URL "data:application/pdf;base64,..."
+    const dataUrl: string = data.file_data;
+    // Open in new tab
+    const win = window.open();
+    if (win) {
+      win.document.write(`<iframe src="${dataUrl}" style="width:100%;height:100vh;border:none;" title="${data.file_name}"></iframe>`);
+    }
+  }
+
+  async function handleDownload(docId: string) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any)
+      .from("cashup_documents")
+      .select("file_data, file_name")
+      .eq("id", docId)
+      .single();
+    if (error || !data?.file_data) return;
+    const link = document.createElement("a");
+    link.href = data.file_data as string;
+    link.download = data.file_name as string;
+    link.click();
+  }
 
   // New upload form state
   const [pendingFile, setPendingFile] = useState<File | null>(null);
@@ -568,6 +638,22 @@ export function DocumentUpload({
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <VerificationBadge status={doc.verification_status} />
+                  <button
+                    type="button"
+                    onClick={() => handleView(doc.id)}
+                    className="text-gray-400 hover:text-accent transition-colors p-1"
+                    title="View document"
+                  >
+                    <Eye size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDownload(doc.id)}
+                    className="text-gray-400 hover:text-accent transition-colors p-1"
+                    title="Download"
+                  >
+                    <Download size={14} />
+                  </button>
                   {!readOnly && (
                     <button
                       type="button"
