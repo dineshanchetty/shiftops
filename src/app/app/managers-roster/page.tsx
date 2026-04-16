@@ -223,27 +223,36 @@ export default function ManagersRosterPage() {
     setTimeout(() => handleCellSave(dateStr, staffId), 50);
   }
 
-  // Pre-fill: apply weekly pattern to entire month for a manager
+  // Pre-fill: delete existing entries for this manager/month, then insert fresh from pattern
   async function applyPrefill() {
     if (!prefillMgr) return;
     setBulkSaving(true);
 
     const numDays = daysInMonth(month, year);
+    const startDate = `${year}-${String(month + 1).padStart(2, "0")}-01`;
+    const endDate = `${year}-${String(month + 1).padStart(2, "0")}-${numDays}`;
+
+    // Step 1: Delete all existing entries for this manager in this month
+    await supabase
+      .from("roster_entries")
+      .delete()
+      .eq("staff_id", prefillMgr)
+      .eq("branch_id", selectedBranch)
+      .gte("date", startDate)
+      .lte("date", endDate);
+
+    // Step 2: Build fresh entries from pattern (only working days, skip OFF)
     const entriesToSave: Parameters<typeof saveRosterEntries>[0] = [];
-    const updatedGrid = { ...grid };
 
     for (let d = 1; d <= numDays; d++) {
       const dateObj = new Date(year, month, d);
       const dow = dateObj.getDay();
       const dateStr = toDateStr(dateObj);
-      const key = `${dateStr}_${prefillMgr}`;
       const pattern = prefillPattern[dow];
 
       if (pattern && pattern.start && pattern.end) {
         const hours = calcHours(pattern.start, pattern.end);
-        updatedGrid[key] = { ...updatedGrid[key], start: pattern.start, end: pattern.end, isLeave: false };
         entriesToSave.push({
-          id: updatedGrid[key]?.entryId,
           staffId: prefillMgr,
           date: dateStr,
           shiftStart: pattern.start,
@@ -253,22 +262,11 @@ export default function ManagersRosterPage() {
           branchId: selectedBranch,
           tenantId,
         });
-      } else {
-        updatedGrid[key] = { ...updatedGrid[key], start: "", end: "", isLeave: false };
-        entriesToSave.push({
-          id: updatedGrid[key]?.entryId,
-          staffId: prefillMgr,
-          date: dateStr,
-          isOff: true,
-          branchId: selectedBranch,
-          tenantId,
-        });
       }
+      // OFF days: no entry created (absence = off)
     }
 
-    setGrid(updatedGrid);
-
-    // Save in batches of 10
+    // Step 3: Save in batches of 10
     for (let i = 0; i < entriesToSave.length; i += 10) {
       await saveRosterEntries(entriesToSave.slice(i, i + 10));
     }
