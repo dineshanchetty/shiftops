@@ -3,7 +3,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 /**
  * Parse Cashup Document — Edge Function
  *
- * Uses Claude Vision API to extract totals from uploaded cashup documents:
+ * Uses OpenAI GPT-4o Vision API to extract totals from uploaded cashup documents:
  *   - cc_batch: Credit card batch settlement report → extract total CC amount
  *   - banking_slip: Bank deposit slip → extract deposit total
  *   - cashup_summary: POS cashup summary → extract key figures
@@ -12,8 +12,8 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
  */
 
 interface ParseRequest {
-  imageBase64: string; // Base64 encoded image (no data: prefix)
-  mimeType: string;    // "image/jpeg", "image/png", "application/pdf"
+  imageBase64: string;
+  mimeType: string;
   docType: "cc_batch" | "banking_slip" | "cashup_summary" | "stock_report" | "other";
 }
 
@@ -25,7 +25,7 @@ interface ParseResult {
   error?: string;
 }
 
-const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
+const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
 
 const DOC_PROMPTS: Record<string, string> = {
   cc_batch: `You are analyzing a credit card batch settlement report from a restaurant or franchise.
@@ -57,7 +57,6 @@ Return the primary total amount as a number.`,
 };
 
 Deno.serve(async (req: Request) => {
-  // CORS headers
   const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -76,9 +75,9 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    if (!ANTHROPIC_API_KEY) {
+    if (!OPENAI_API_KEY) {
       return new Response(
-        JSON.stringify({ error: "ANTHROPIC_API_KEY not configured" }),
+        JSON.stringify({ error: "OPENAI_API_KEY not configured" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -95,52 +94,47 @@ Deno.serve(async (req: Request) => {
 
     const systemPrompt = DOC_PROMPTS[docType] ?? DOC_PROMPTS.other;
 
-    // Determine media type for Claude Vision
-    let mediaType = mimeType;
-    if (mediaType === "application/pdf") {
-      // Claude supports PDF via document type
-      mediaType = "application/pdf";
-    }
+    // Build data URL for OpenAI
+    const safeMime = mimeType.startsWith("image/") ? mimeType : "image/jpeg";
+    const dataUrl = `data:${safeMime};base64,${imageBase64}`;
 
-    // Call Claude Vision API
-    const claudeResponse = await fetch("https://api.anthropic.com/v1/messages", {
+    // Call OpenAI GPT-4o Vision API
+    const openaiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        "x-api-key": ANTHROPIC_API_KEY,
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01",
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "gpt-4o",
         max_tokens: 1024,
+        response_format: { type: "json_object" },
         messages: [
           {
-            role: "user",
-            content: [
-              {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: mediaType.startsWith("image/") ? mediaType : "image/jpeg",
-                  data: imageBase64,
-                },
-              },
-              {
-                type: "text",
-                text: `${systemPrompt}
-
-IMPORTANT: Respond in this exact JSON format only, no other text:
+            role: "system",
+            content: `You are a financial document analyzer for a South African restaurant franchise.
+All amounts are in South African Rands (ZAR), without currency symbols.
+Respond ONLY in this exact JSON format:
 {
   "amount": <number or null if not found>,
   "confidence": "high" | "medium" | "low",
   "rawText": "<brief description of what you found>",
   "breakdown": { "<label>": <number>, ... }
 }
-
 Use "high" confidence if the total is clearly visible and unambiguous.
 Use "medium" if you had to calculate or interpret.
-Use "low" if you're guessing or the document is unclear.
-All amounts should be in South African Rands (ZAR), without currency symbols.`,
+Use "low" if you're guessing or the document is unclear.`,
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: systemPrompt,
+              },
+              {
+                type: "image_url",
+                image_url: { url: dataUrl, detail: "high" },
               },
             ],
           },
@@ -148,39 +142,28 @@ All amounts should be in South African Rands (ZAR), without currency symbols.`,
       }),
     });
 
-    if (!claudeResponse.ok) {
-      const errBody = await claudeResponse.text();
-      console.error("Claude API error:", claudeResponse.status, errBody);
+    if (!openaiResponse.ok) {
+      const errBody = await openaiResponse.text();
+      console.error("OpenAI API error:", openaiResponse.status, errBody);
       return new Response(
         JSON.stringify({ error: "Vision API failed", details: errBody }),
         { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const claudeData = await claudeResponse.json();
-    const textContent = claudeData.content?.[0]?.text ?? "";
+    const openaiData = await openaiResponse.json();
+    const textContent = openaiData.choices?.[0]?.message?.content ?? "";
 
-    // Parse the JSON response from Claude
+    // Parse the JSON response
     let result: ParseResult;
     try {
-      // Extract JSON from response (Claude might wrap it in markdown)
-      const jsonMatch = textContent.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        result = {
-          amount: typeof parsed.amount === "number" ? parsed.amount : null,
-          confidence: ["high", "medium", "low"].includes(parsed.confidence) ? parsed.confidence : "low",
-          rawText: parsed.rawText ?? textContent.slice(0, 200),
-          breakdown: parsed.breakdown ?? undefined,
-        };
-      } else {
-        result = {
-          amount: null,
-          confidence: "low",
-          rawText: textContent.slice(0, 200),
-          error: "Could not parse structured response from vision model",
-        };
-      }
+      const parsed = JSON.parse(textContent);
+      result = {
+        amount: typeof parsed.amount === "number" ? parsed.amount : null,
+        confidence: ["high", "medium", "low"].includes(parsed.confidence) ? parsed.confidence : "low",
+        rawText: parsed.rawText ?? textContent.slice(0, 200),
+        breakdown: parsed.breakdown ?? undefined,
+      };
     } catch {
       result = {
         amount: null,
