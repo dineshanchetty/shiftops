@@ -99,7 +99,21 @@ const SUPPORTING_REPORT_PROMPTS: Partial<Record<ReportType, string>> = {
   stock_variance: `You are analyzing a "Stock Variance" PDF from Aura POS. Extract the total variance amount (positive or negative). Return JSON: { "total": <number> }`,
   cc_batch: `You are analyzing a credit card batch settlement report. Extract the TOTAL credit card amount processed. Return JSON: { "total": <number> }`,
   banking_slip: `You are analyzing a bank deposit slip. Extract the TOTAL deposit amount. Return JSON: { "total": <number> }`,
-  scan: `You are analyzing a scanned document (possibly a CC batch slip, banking slip, or cashup summary). Extract any monetary total you can find. Return JSON: { "total": <number>, "description": "<what the document appears to be>" }`,
+  scan: `You are analyzing a scanned document from a restaurant cashup. It could be a credit card batch settlement receipt, a bank deposit slip, or something else.
+
+First, CLASSIFY the document by identifying key phrases:
+- "CC batch" / "credit card" / "Batch Total" / "Settlement" / card brand names (Visa, Mastercard) → classification: "cc_batch"
+- "Deposit" / "Bank" / "Banking Slip" / "Pay-in" → classification: "banking_slip"
+- "Cashup" / "Gross Sales" / "Cash tendered" → classification: "cashup_summary"
+- Otherwise → classification: "other"
+
+Then extract the TOTAL amount (grand total, settlement total, or final sum).
+
+Return JSON: {
+  "classification": "cc_batch" | "banking_slip" | "cashup_summary" | "other",
+  "total": <number>,
+  "description": "<1 short sentence describing the document>"
+}`,
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -291,8 +305,8 @@ Deno.serve(async (req: Request) => {
       debtors: toNum(aiFields.debtors),
     };
 
-    // Create aura_imports record
-    const { data: importRec } = await supabase
+    // Create aura_imports record (with error logging)
+    const { data: importRec, error: importInsertErr } = await supabase
       .from("aura_imports")
       .insert({
         tenant_id: branch.tenant_id,
@@ -303,7 +317,8 @@ Deno.serve(async (req: Request) => {
         raw_data: { ...aiFields, email_sender: from, email_subject: subject, pdf_count: pdfs.length },
       })
       .select("id")
-      .single();
+      .maybeSingle();
+    if (importInsertErr) console.error("aura_imports insert failed:", JSON.stringify(importInsertErr));
 
     // Upsert daily_cashup
     const { data: existing } = await supabase
@@ -356,21 +371,33 @@ Deno.serve(async (req: Request) => {
 
     for (const pdf of pdfs) {
       const isCashupSummary = pdf === summaryPdf;
+      let reportInfo = pdf.info;
       const prompt = isCashupSummary ? null : SUPPORTING_REPORT_PROMPTS[pdf.info.type];
       let extractedData: Record<string, unknown> | null = null;
       let extractedTotal: number | null = null;
       let verificationStatus: "pending" | "verified" | "mismatch" = "pending";
       let variance: number | null = null;
 
-      // Extract figure from supporting report (skip re-parsing the summary)
       if (prompt) {
         extractedData = await callOpenAIPDF(pdf.base64, pdf.filename, prompt);
         extractedTotal = toNum(extractedData?.total);
 
-        // Cross-validate against cashup field
-        if (pdf.info.validatesField && extractedTotal !== null) {
-          const cashupValue = cashupFields[pdf.info.validatesField];
-          const isSales = pdf.info.validatesField === "gross_turnover";
+        // For scans, reclassify based on AI-identified document type
+        if (pdf.info.type === "scan" && extractedData?.classification) {
+          const cls = String(extractedData.classification);
+          if (cls === "cc_batch") {
+            reportInfo = { type: "cc_batch", validatesField: "credit_cards", docType: "cc_batch" };
+          } else if (cls === "banking_slip") {
+            reportInfo = { type: "banking_slip", validatesField: "cash_banked", docType: "banking_slip" };
+          } else if (cls === "cashup_summary") {
+            reportInfo = { type: "cashup_summary", validatesField: null, docType: "cashup_summary" };
+          }
+          console.log(`Scan reclassified as: ${cls} (validates: ${reportInfo.validatesField ?? "none"})`);
+        }
+
+        if (reportInfo.validatesField && extractedTotal !== null) {
+          const cashupValue = cashupFields[reportInfo.validatesField];
+          const isSales = reportInfo.validatesField === "gross_turnover";
           const tolerance = isSales ? SALES_TOLERANCE : CASH_TOLERANCE;
           const result = computeVariance(extractedTotal, cashupValue, tolerance);
           verificationStatus = result.status;
@@ -379,40 +406,56 @@ Deno.serve(async (req: Request) => {
 
         validations.push({
           filename: pdf.filename,
-          type: pdf.info.type,
+          type: reportInfo.type,
           extracted: extractedTotal,
-          cashupValue: pdf.info.validatesField ? cashupFields[pdf.info.validatesField] : null,
+          cashupValue: reportInfo.validatesField ? cashupFields[reportInfo.validatesField] : null,
           status: verificationStatus,
           variance,
         });
       }
 
-      // Build parsed_data metadata
       const parsedData: Record<string, unknown> = isCashupSummary
-        ? { source: "email", report_type: pdf.info.type, extracted_fields: cashupFields }
+        ? { source: "email", report_type: reportInfo.type, extracted_fields: cashupFields }
         : (extractedData ?? {});
-      if (pdf.info.validatesField) parsedData.validates_field = pdf.info.validatesField;
+      if (reportInfo.validatesField) parsedData.validates_field = reportInfo.validatesField;
       if (extractedTotal !== null) parsedData.extracted_total = extractedTotal;
-      parsedData.report_type = pdf.info.type;
+      parsedData.report_type = reportInfo.type;
       parsedData.email_sender = from;
 
-      // Summary PDF is auto-verified (it's the source of truth)
       const finalStatus = isCashupSummary ? "verified" : verificationStatus;
 
-      const { error } = await supabase.from("cashup_documents").insert({
+      // Dedup: check if doc with same filename already exists for this cashup
+      const { data: existingDoc } = await supabase
+        .from("cashup_documents")
+        .select("id")
+        .eq("cashup_id", cashupId)
+        .eq("file_name", pdf.filename)
+        .maybeSingle();
+
+      const docPayload = {
         cashup_id: cashupId,
         tenant_id: branch.tenant_id,
-        doc_type: pdf.info.docType,
+        doc_type: reportInfo.docType,
         file_name: pdf.filename,
         file_data: `data:application/pdf;base64,${pdf.base64}`,
         file_size: pdf.size,
         parsed_data: parsedData,
         verification_status: finalStatus,
         variance_amount: isCashupSummary ? 0 : variance,
-      });
+      };
 
-      if (error) console.error(`Failed to save ${pdf.filename}:`, error.message);
-      else console.log(`Saved: ${pdf.filename} (${pdf.info.type}, ${finalStatus})`);
+      if (existingDoc) {
+        const { error } = await supabase
+          .from("cashup_documents")
+          .update(docPayload)
+          .eq("id", existingDoc.id);
+        if (error) console.error(`Update failed for ${pdf.filename}:`, JSON.stringify(error));
+        else console.log(`Updated: ${pdf.filename} (${reportInfo.type}, ${finalStatus})`);
+      } else {
+        const { error } = await supabase.from("cashup_documents").insert(docPayload);
+        if (error) console.error(`Insert failed for ${pdf.filename}:`, JSON.stringify(error));
+        else console.log(`Saved: ${pdf.filename} (${reportInfo.type}, ${finalStatus})`);
+      }
     }
 
     console.log(`Processed ${pdfs.length} documents (${validations.length} validations)`);
