@@ -183,8 +183,18 @@ function DailyDetailPanel({
     setLocalEntries(entries);
   }, [entries]);
 
+  // Split into managers vs regular staff
+  const managerPosId = positions?.find((p) => p.name.toLowerCase() === "manager")?.id;
+  const isManager = (e: EntryWithStaff) => managerPosId && e.staff.position_id === managerPosId;
+
   const workingEntries = localEntries.filter((e) => !e.is_off);
   const offEntries = localEntries.filter((e) => e.is_off);
+
+  const managerWorking = workingEntries.filter(isManager);
+  const managerOff = offEntries.filter(isManager);
+  const staffWorking = workingEntries.filter((e) => !isManager(e));
+  const staffOff = offEntries.filter((e) => !isManager(e));
+
   const totalHours = workingEntries.reduce((sum, e) => sum + (e.shift_hours ?? 0), 0);
   const staffCount = workingEntries.length;
 
@@ -423,6 +433,134 @@ function DailyDetailPanel({
     ? dragState.edge === "move" ? "cursor-grabbing" : "cursor-col-resize"
     : "";
 
+  // ─── Render helpers for Gantt rows ───
+
+  function renderGanttRow(entry: EntryWithStaff) {
+    const posName = getPositionName(entry.staff.position_id, positions);
+    const colors = posName ? GANTT_BAR_COLORS[posName] ?? DEFAULT_BAR_COLOR : DEFAULT_BAR_COLOR;
+    const label = `${entry.staff.first_name} ${entry.staff.last_name?.[0] ?? ""}.`;
+    const isDragging = dragState?.entryId === entry.id;
+    const isSaving = savingId === entry.id;
+    const isFlashing = flashId === entry.id;
+    const { barLeft, barWidth, hasBar, startMin, endMin } = getBarProps(entry);
+    const tooltipText = isDragging
+      ? `${minutesToTimeStr(startMin)} – ${minutesToTimeStr(endMin)}`
+      : `${entry.shift_start ? formatTime(entry.shift_start) : "--:--"} – ${entry.shift_end ? formatTime(entry.shift_end) : "--:--"}`;
+    const fStart = entry.shift_start ? formatTime(entry.shift_start) : "--:--";
+    const fEnd = entry.shift_end ? formatTime(entry.shift_end) : "--:--";
+    const hoursVal = entry.shift_hours ?? 0;
+
+    return (
+      <div key={entry.id} className="flex items-center group">
+        <div className="w-[140px] sm:w-[180px] shrink-0 pr-3 py-1">
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: colors.bg }} />
+            <select
+              className="text-xs font-medium text-base-700 bg-transparent border-none outline-none cursor-pointer truncate max-w-[120px] sm:max-w-[150px] hover:text-accent appearance-none"
+              value={entry.staff_id}
+              onChange={async (e) => {
+                const newStaffId = e.target.value;
+                if (newStaffId === entry.staff_id) return;
+                const newStaff = allStaff.find(s => s.id === newStaffId);
+                if (!newStaff) return;
+                setLocalEntries(prev => prev.map(le =>
+                  le.id === entry.id
+                    ? { ...le, staff_id: newStaffId, staff: { first_name: newStaff.first_name, last_name: newStaff.last_name, position_id: newStaff.position_id, sub_position_id: newStaff.sub_position_id ?? null } }
+                    : le
+                ));
+                await supabase.from("roster_entries").update({ staff_id: newStaffId }).eq("id", entry.id);
+                onEntryUpdated?.();
+              }}
+            >
+              <option value={entry.staff_id}>{entry.staff.first_name} {entry.staff.last_name.charAt(0)}.</option>
+              {allStaff
+                .filter(s => s.id !== entry.staff_id && !localEntries.some(le => le.staff_id === s.id && le.id !== entry.id))
+                .map(s => (<option key={s.id} value={s.id}>{s.first_name} {s.last_name.charAt(0)}.</option>))
+              }
+            </select>
+          </div>
+        </div>
+        <div className="flex-1 relative h-[36px]">
+          {hours.map((h) => {
+            const pct = ((h * 60 - rangeStartMin) / totalRangeMin) * 100;
+            if (pct <= 0 || pct >= 100) return null;
+            return <div key={h} className="absolute top-0 bottom-0 w-px bg-gray-100" style={{ left: `${pct}%` }} />;
+          })}
+          {currentTimePercent !== null && (
+            <div className="absolute top-0 bottom-0 w-px border-l border-dashed border-red-500 z-10" style={{ left: `${currentTimePercent}%` }} />
+          )}
+          {hasBar && (
+            <div
+              className={cn(
+                "absolute top-[4px] h-[28px] rounded-md shadow-sm flex items-center px-2 overflow-visible select-none",
+                isSaving && "opacity-60",
+                isFlashing && "ring-2 ring-offset-1 ring-accent",
+                isDragging ? "opacity-80 z-20" : "z-10"
+              )}
+              style={{ left: `${barLeft}%`, width: `${barWidth}%`, backgroundColor: colors.bg, transition: isDragging ? "none" : undefined }}
+              title={`${entry.staff.first_name} ${entry.staff.last_name} | ${posName ?? "—"} | ${fStart}–${fEnd} (${Math.round(hoursVal)}h)`}
+            >
+              <div className="absolute left-0 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-10" onMouseDown={(e) => handleMouseDown(e, entry, "start")}>
+                <div className="w-0.5 h-3 bg-white/50 rounded-full" />
+              </div>
+              <div className="absolute inset-x-3 top-0 bottom-0 cursor-grab active:cursor-grabbing flex items-center px-1" onMouseDown={(e) => handleMouseDown(e, entry, "move")}>
+                {barWidth > 8 && <span className="text-[10px] font-medium truncate leading-none pointer-events-none" style={{ color: colors.text }}>{label}</span>}
+              </div>
+              <div className="absolute right-0 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-10" onMouseDown={(e) => handleMouseDown(e, entry, "end")}>
+                <div className="w-0.5 h-3 bg-white/50 rounded-full" />
+              </div>
+              {!isDragging && (
+                <button className="absolute -top-2 -right-2 h-4 w-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20 shadow" onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(entry.id); }} title="Remove shift">
+                  <X size={8} />
+                </button>
+              )}
+              {isDragging && (
+                <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-[10px] font-mono px-2 py-1 rounded whitespace-nowrap z-30 shadow-lg">{tooltipText}</div>
+              )}
+            </div>
+          )}
+          {!hasBar && (
+            <div className="absolute inset-0 flex items-center">
+              <span className="text-[10px] text-base-400 font-mono">{fStart}–{fEnd}</span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  function renderOffRow(entry: EntryWithStaff) {
+    return (
+      <div key={entry.id} className="flex items-center group opacity-50">
+        <div className="w-[140px] sm:w-[180px] shrink-0 pr-3 py-1">
+          <div className="flex items-center gap-2">
+            <span className="inline-block h-2 w-2 rounded-full shrink-0 bg-gray-300" />
+            <span className="text-xs font-medium text-base-400 truncate line-through">
+              {entry.staff.first_name} {entry.staff.last_name}
+            </span>
+          </div>
+        </div>
+        <div className="flex-1 relative h-[36px]">
+          {hours.map((h) => {
+            const pct = ((h * 60 - rangeStartMin) / totalRangeMin) * 100;
+            if (pct <= 0 || pct >= 100) return null;
+            return <div key={h} className="absolute top-0 bottom-0 w-px bg-gray-100" style={{ left: `${pct}%` }} />;
+          })}
+          <div className="absolute inset-0 flex items-center">
+            <span className="text-[10px] font-semibold text-base-400 bg-base-100 rounded px-1.5 py-0.5">OFF</span>
+          </div>
+          <button
+            className="absolute right-1 top-1/2 -translate-y-1/2 h-4 w-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20 shadow"
+            onClick={() => setConfirmDeleteId(entry.id)}
+            title="Remove"
+          >
+            <X size={8} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={cn("border-t border-base-200 bg-surface rounded-b-xl overflow-hidden", cursorStyle)}>
       {/* Header */}
@@ -432,7 +570,15 @@ function DailyDetailPanel({
             {formatFullDate(dateStr)}
           </h3>
           <p className="text-sm text-base-500 mt-0.5">
-            {staffCount} staff &middot; {Math.round(totalHours)}h total
+            {managerWorking.length > 0 && (
+              <span className="text-purple-600 font-medium">{managerWorking.length} mgr{managerWorking.length !== 1 ? 's' : ''}</span>
+            )}
+            {managerWorking.length > 0 && staffWorking.length > 0 && ' · '}
+            {staffWorking.length > 0 && (
+              <span>{staffWorking.length} staff</span>
+            )}
+            {staffCount === 0 && <span>0 staff</span>}
+            {' · '}{Math.round(totalHours)}h total
           </p>
         </div>
         {/* Staff can be swapped via dropdown on each bar */}
@@ -471,216 +617,46 @@ function DailyDetailPanel({
                 </div>
               </div>
 
-              {/* Staff rows */}
-              {workingEntries.map((entry) => {
-                const posName = getPositionName(entry.staff.position_id, positions);
-                const colors = posName ? GANTT_BAR_COLORS[posName] ?? DEFAULT_BAR_COLOR : DEFAULT_BAR_COLOR;
-                const firstName = entry.staff.first_name;
-                const lastInitial = entry.staff.last_name?.[0] ?? "";
-                const label = `${firstName} ${lastInitial}.`;
-
-                const isDragging = dragState?.entryId === entry.id;
-                const isSaving = savingId === entry.id;
-                const isFlashing = flashId === entry.id;
-
-                const { barLeft, barWidth, hasBar, startMin, endMin } = getBarProps(entry);
-                const tooltipText = isDragging
-                  ? `${minutesToTimeStr(startMin)} – ${minutesToTimeStr(endMin)}`
-                  : `${entry.shift_start ? formatTime(entry.shift_start) : "--:--"} – ${entry.shift_end ? formatTime(entry.shift_end) : "--:--"}`;
-
-                const fStart = entry.shift_start ? formatTime(entry.shift_start) : "--:--";
-                const fEnd = entry.shift_end ? formatTime(entry.shift_end) : "--:--";
-                const hoursVal = entry.shift_hours ?? 0;
-
-                return (
-                  <div key={entry.id} className="flex items-center group">
-                    {/* Staff name — dropdown to swap */}
-                    <div className="w-[140px] sm:w-[180px] shrink-0 pr-3 py-1">
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className="inline-block h-2 w-2 rounded-full shrink-0"
-                          style={{ backgroundColor: colors.bg }}
-                        />
-                        <select
-                          className="text-xs font-medium text-base-700 bg-transparent border-none outline-none cursor-pointer truncate max-w-[120px] sm:max-w-[150px] hover:text-accent appearance-none"
-                          value={entry.staff_id}
-                          onChange={async (e) => {
-                            const newStaffId = e.target.value;
-                            if (newStaffId === entry.staff_id) return;
-                            const newStaff = allStaff.find(s => s.id === newStaffId);
-                            if (!newStaff) return;
-                            // Update locally
-                            setLocalEntries(prev => prev.map(le =>
-                              le.id === entry.id
-                                ? { ...le, staff_id: newStaffId, staff: { first_name: newStaff.first_name, last_name: newStaff.last_name, position_id: newStaff.position_id, sub_position_id: newStaff.sub_position_id ?? null } }
-                                : le
-                            ));
-                            // Save to DB
-                            await supabase.from("roster_entries").update({ staff_id: newStaffId }).eq("id", entry.id);
-                            onEntryUpdated?.();
-                          }}
-                        >
-                          <option value={entry.staff_id}>
-                            {entry.staff.first_name} {entry.staff.last_name.charAt(0)}.
-                          </option>
-                          {allStaff
-                            .filter(s => s.id !== entry.staff_id && !localEntries.some(le => le.staff_id === s.id && le.id !== entry.id))
-                            .map(s => (
-                              <option key={s.id} value={s.id}>
-                                {s.first_name} {s.last_name.charAt(0)}.
-                              </option>
-                            ))
-                          }
-                        </select>
-                      </div>
-                    </div>
-
-                    {/* Timeline area */}
-                    <div className="flex-1 relative h-[36px]">
-                      {/* Hour grid lines */}
-                      {hours.map((h) => {
-                        const pct = ((h * 60 - rangeStartMin) / totalRangeMin) * 100;
-                        if (pct <= 0 || pct >= 100) return null;
-                        return (
-                          <div
-                            key={h}
-                            className="absolute top-0 bottom-0 w-px bg-gray-100"
-                            style={{ left: `${pct}%` }}
-                          />
-                        );
-                      })}
-
-                      {/* Current time line */}
-                      {currentTimePercent !== null && (
-                        <div
-                          className="absolute top-0 bottom-0 w-px border-l border-dashed border-red-500 z-10"
-                          style={{ left: `${currentTimePercent}%` }}
-                        />
-                      )}
-
-                      {/* Shift bar */}
-                      {hasBar && (
-                        <div
-                          className={cn(
-                            "absolute top-[4px] h-[28px] rounded-md shadow-sm flex items-center px-2 overflow-visible select-none",
-                            isSaving && "opacity-60",
-                            isFlashing && "ring-2 ring-offset-1 ring-accent",
-                            isDragging ? "opacity-80 z-20" : "z-10"
-                          )}
-                          style={{
-                            left: `${barLeft}%`,
-                            width: `${barWidth}%`,
-                            backgroundColor: colors.bg,
-                            transition: isDragging ? "none" : undefined,
-                          }}
-                          title={`${entry.staff.first_name} ${entry.staff.last_name} | ${posName ?? "—"} | ${fStart}–${fEnd} (${Math.round(hoursVal)}h)`}
-                        >
-                          {/* Left drag handle (change start) */}
-                          <div
-                            className="absolute left-0 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-10"
-                            onMouseDown={(e) => handleMouseDown(e, entry, "start")}
-                          >
-                            <div className="w-0.5 h-3 bg-white/50 rounded-full" />
-                          </div>
-
-                          {/* Middle (move entire shift) */}
-                          <div
-                            className="absolute inset-x-3 top-0 bottom-0 cursor-grab active:cursor-grabbing flex items-center px-1"
-                            onMouseDown={(e) => handleMouseDown(e, entry, "move")}
-                          >
-                            {barWidth > 8 && (
-                              <span
-                                className="text-[10px] font-medium truncate leading-none pointer-events-none"
-                                style={{ color: colors.text }}
-                              >
-                                {label}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Right drag handle (change end) */}
-                          <div
-                            className="absolute right-0 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-10"
-                            onMouseDown={(e) => handleMouseDown(e, entry, "end")}
-                          >
-                            <div className="w-0.5 h-3 bg-white/50 rounded-full" />
-                          </div>
-
-                          {/* Remove button */}
-                          {!isDragging && (
-                            <button
-                              className="absolute -top-2 -right-2 h-4 w-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20 shadow"
-                              onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(entry.id); }}
-                              title="Remove shift"
-                            >
-                              <X size={8} />
-                            </button>
-                          )}
-
-                          {/* Tooltip when dragging */}
-                          {isDragging && (
-                            <div
-                              className="absolute -top-8 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-[10px] font-mono px-2 py-1 rounded whitespace-nowrap z-30 shadow-lg"
-                            >
-                              {tooltipText}
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* No bar fallback: show time text */}
-                      {!hasBar && (
-                        <div className="absolute inset-0 flex items-center">
-                          <span className="text-[10px] text-base-400 font-mono">
-                            {entry.shift_start ? formatTime(entry.shift_start) : "--:--"}–{entry.shift_end ? formatTime(entry.shift_end) : "--:--"}
-                          </span>
-                        </div>
-                      )}
-                    </div>
+              {/* ── Managers Section ── */}
+              {(managerWorking.length > 0 || managerOff.length > 0) && (
+                <div className="mb-2">
+                  <div className="flex items-center gap-2 py-1.5 border-b border-purple-200 mb-1">
+                    <span className="inline-block h-2 w-2 rounded-full bg-purple-500" />
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-purple-600">
+                      Managers
+                    </span>
+                    <span className="text-[10px] text-purple-400 ml-1">
+                      {managerWorking.length} on · {managerOff.length} off
+                    </span>
                   </div>
-                );
-              })}
-
-              {/* OFF entries */}
-              {offEntries.map((entry) => (
-                <div key={entry.id} className="flex items-center group opacity-50">
-                  <div className="w-[140px] sm:w-[180px] shrink-0 pr-3 py-1">
-                    <div className="flex items-center gap-2">
-                      <span className="inline-block h-2 w-2 rounded-full shrink-0 bg-gray-300" />
-                      <span className="text-xs font-medium text-base-400 truncate line-through">
-                        {entry.staff.first_name} {entry.staff.last_name}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex-1 relative h-[36px]">
-                    {/* Hour grid lines */}
-                    {hours.map((h) => {
-                      const pct = ((h * 60 - rangeStartMin) / totalRangeMin) * 100;
-                      if (pct <= 0 || pct >= 100) return null;
-                      return (
-                        <div
-                          key={h}
-                          className="absolute top-0 bottom-0 w-px bg-gray-100"
-                          style={{ left: `${pct}%` }}
-                        />
-                      );
-                    })}
-                    <div className="absolute inset-0 flex items-center">
-                      <span className="text-[10px] font-semibold text-base-400 bg-base-100 rounded px-1.5 py-0.5">
-                        OFF
-                      </span>
-                    </div>
-                    {/* Remove OFF entry */}
-                    <button
-                      className="absolute right-1 top-1/2 -translate-y-1/2 h-4 w-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20 shadow"
-                      onClick={() => setConfirmDeleteId(entry.id)}
-                      title="Remove"
-                    >
-                      <X size={8} />
-                    </button>
+                  <div className="bg-purple-50/30 rounded-md px-1">
+                    {managerWorking.map((entry) => renderGanttRow(entry))}
+                    {managerOff.map((entry) => renderOffRow(entry))}
                   </div>
                 </div>
-              ))}
+              )}
+
+              {/* ── Staff Section ── */}
+              {(staffWorking.length > 0 || staffOff.length > 0) && (
+                <div className="mb-2">
+                  <div className="flex items-center gap-2 py-1.5 border-b border-blue-200 mb-1">
+                    <span className="inline-block h-2 w-2 rounded-full bg-blue-500" />
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-blue-600">
+                      Staff
+                    </span>
+                    <span className="text-[10px] text-blue-400 ml-1">
+                      {staffWorking.length} on · {staffOff.length} off
+                    </span>
+                  </div>
+                  {staffWorking.map((entry) => renderGanttRow(entry))}
+                  {staffOff.map((entry) => renderOffRow(entry))}
+                </div>
+              )}
+
+              {/* Fallback: render unsectioned if no manager/staff split applies */}
+              {managerWorking.length === 0 && managerOff.length === 0 && staffWorking.length === 0 && staffOff.length === 0 && workingEntries.map((entry) => renderGanttRow(entry))}
+
+              {managerWorking.length === 0 && managerOff.length === 0 && staffWorking.length === 0 && staffOff.length === 0 && offEntries.map((entry) => renderOffRow(entry))}
 
               {/* Add Staff row */}
               <div className="mt-3 flex items-center gap-2 relative">
