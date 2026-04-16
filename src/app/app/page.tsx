@@ -623,10 +623,14 @@ export default function DashboardPage() {
         const last7Map = new Map<string, number>();
         last7Raw.forEach((c) => { if (c.gross_turnover != null) last7Map.set(c.date, c.gross_turnover); });
 
+        // Show Mon-Sun of the current week (always 7 days)
         const last7DaysTurnover: { date: string; turnover: number }[] = [];
-        for (let i = 6; i >= 0; i--) {
+        const nowDate = new Date();
+        const currentDow = nowDate.getDay(); // 0=Sun, 1=Mon...
+        const mondayOffset = currentDow === 0 ? -6 : 1 - currentDow;
+        for (let i = 0; i < 7; i++) {
           const d = new Date();
-          d.setDate(d.getDate() - i);
+          d.setDate(d.getDate() + mondayOffset + i);
           const ds = d.toISOString().split('T')[0];
           last7DaysTurnover.push({ date: ds, turnover: last7Map.get(ds) ?? 0 });
         }
