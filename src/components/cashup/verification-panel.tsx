@@ -64,6 +64,7 @@ interface VerificationPanelProps {
 
 export function VerificationPanel({
   cashupId,
+  tenantId,
   readOnly = false,
   initialCashup,
   onFieldUpdate,
@@ -79,7 +80,7 @@ export function VerificationPanel({
   const [savingField, setSavingField] = useState<FieldKey | null>(null);
 
   const loadDocs = useCallback(async () => {
-    if (!cashupId) {
+    if (!cashupId || !tenantId) {
       setLoading(false);
       return;
     }
@@ -91,11 +92,13 @@ export function VerificationPanel({
         .from("cashup_documents")
         .select("id, file_name, doc_type, verification_status, variance_amount, parsed_data")
         .eq("cashup_id", cashupId)
+        .eq("tenant_id", tenantId)
         .order("created_at"),
       (supabase as any)
         .from("daily_cashups")
         .select("field_confirmations, confirmed_at")
         .eq("id", cashupId)
+        .eq("tenant_id", tenantId)
         .maybeSingle(),
     ]);
 
@@ -129,6 +132,7 @@ export function VerificationPanel({
       .from("cashup_documents")
       .select("file_data, file_name")
       .eq("id", docId)
+      .eq("tenant_id", tenantId)
       .single();
     if (!data?.file_data) return;
 
@@ -157,7 +161,8 @@ export function VerificationPanel({
     const { error } = await (supabase as any)
       .from("daily_cashups")
       .update({ [field]: num })
-      .eq("id", cashupId);
+      .eq("id", cashupId)
+      .eq("tenant_id", tenantId);
 
     if (!error) {
       onFieldUpdate(field, num);
@@ -185,7 +190,8 @@ export function VerificationPanel({
     await (supabase as any)
       .from("daily_cashups")
       .update({ field_confirmations: updated })
-      .eq("id", cashupId);
+      .eq("id", cashupId)
+      .eq("tenant_id", tenantId);
   }
 
   async function handleConfirmCashup() {
@@ -200,7 +206,8 @@ export function VerificationPanel({
         confirmed_by: user?.id,
         status: "verified",
       })
-      .eq("id", cashupId);
+      .eq("id", cashupId)
+      .eq("tenant_id", tenantId);
 
     if (!error) setCashupConfirmedAt(new Date().toISOString());
   }

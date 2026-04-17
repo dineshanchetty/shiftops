@@ -16,6 +16,11 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY")!;
+// SendGrid Event Webhook public key (ECDSA P-256, base64 DER). Set once signed webhooks are enabled.
+const SENDGRID_WEBHOOK_PUBLIC_KEY = Deno.env.get("SENDGRID_WEBHOOK_PUBLIC_KEY");
+
+// Rate limit: max emails per sender per hour window.
+const RATE_LIMIT_MAX_PER_HOUR = 10;
 
 // Tolerance for variance checks (R5 for cash, larger for sales totals)
 const CASH_TOLERANCE = 5.0;
@@ -203,15 +208,133 @@ function computeVariance(reportValue: number | null, cashupValue: number | null,
   };
 }
 
+// ─── Security helpers ────────────────────────────────────────────────────────
+
+/**
+ * Verify SendGrid Event Webhook signature (ECDSA P-256 over SHA-256).
+ * Reference: https://docs.sendgrid.com/for-developers/tracking-events/getting-started-event-webhook-security-features
+ *
+ * The signed payload is: `timestamp + raw_body`.
+ * Returns true if signature is valid OR if no public key is configured (dev mode).
+ */
+async function verifySendGridSignature(
+  signature: string | null,
+  timestamp: string | null,
+  rawBody: string,
+): Promise<boolean> {
+  if (!SENDGRID_WEBHOOK_PUBLIC_KEY) {
+    console.warn("SENDGRID_WEBHOOK_PUBLIC_KEY not set — skipping signature verification");
+    return true;
+  }
+  if (!signature || !timestamp) return false;
+
+  // Reject stale requests (replay attack defense): >10 min old
+  const tsMs = parseInt(timestamp) * 1000;
+  if (!isFinite(tsMs) || Math.abs(Date.now() - tsMs) > 10 * 60 * 1000) {
+    console.warn("Stale or invalid webhook timestamp");
+    return false;
+  }
+
+  try {
+    // SendGrid key is a PEM or base64 DER. We accept both by stripping PEM framing.
+    const keyB64 = SENDGRID_WEBHOOK_PUBLIC_KEY
+      .replace(/-----BEGIN PUBLIC KEY-----/g, "")
+      .replace(/-----END PUBLIC KEY-----/g, "")
+      .replace(/\s+/g, "");
+    const keyBytes = Uint8Array.from(atob(keyB64), (c) => c.charCodeAt(0));
+    const publicKey = await crypto.subtle.importKey(
+      "spki",
+      keyBytes,
+      { name: "ECDSA", namedCurve: "P-256" },
+      false,
+      ["verify"],
+    );
+
+    const sigBytes = Uint8Array.from(atob(signature), (c) => c.charCodeAt(0));
+    const msgBytes = new TextEncoder().encode(timestamp + rawBody);
+
+    // SendGrid signatures are DER-encoded; WebCrypto wants raw r||s (IEEE P1363).
+    const rawSig = derToRawSig(sigBytes);
+    return await crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" },
+      publicKey,
+      rawSig,
+      msgBytes,
+    );
+  } catch (err) {
+    console.error("Signature verification error:", err);
+    return false;
+  }
+}
+
+/** Convert ASN.1 DER-encoded ECDSA signature to IEEE P1363 raw (r||s) 64-byte format. */
+function derToRawSig(der: Uint8Array): Uint8Array {
+  // Minimal DER parser for SEQUENCE { INTEGER r, INTEGER s }
+  let offset = 2; // skip SEQUENCE tag + len
+  if (der[0] !== 0x30) throw new Error("bad DER: no SEQUENCE");
+  // skip length byte(s)
+  if (der[1] & 0x80) offset += der[1] & 0x7f;
+
+  if (der[offset] !== 0x02) throw new Error("bad DER: no INTEGER r");
+  const rLen = der[offset + 1];
+  let r = der.slice(offset + 2, offset + 2 + rLen);
+  offset += 2 + rLen;
+
+  if (der[offset] !== 0x02) throw new Error("bad DER: no INTEGER s");
+  const sLen = der[offset + 1];
+  let s = der.slice(offset + 2, offset + 2 + sLen);
+
+  // Strip leading zeros, then left-pad to 32 bytes
+  const stripAndPad = (v: Uint8Array): Uint8Array => {
+    let i = 0;
+    while (i < v.length - 1 && v[i] === 0x00) i++;
+    const trimmed = v.slice(i);
+    if (trimmed.length > 32) throw new Error("r or s too long");
+    const padded = new Uint8Array(32);
+    padded.set(trimmed, 32 - trimmed.length);
+    return padded;
+  };
+  r = stripAndPad(r);
+  s = stripAndPad(s);
+
+  const out = new Uint8Array(64);
+  out.set(r, 0);
+  out.set(s, 32);
+  return out;
+}
+
+/**
+ * Rate limit check — returns true if the sender has exceeded the hourly cap.
+ * Uses email_ingest_log for the rolling window.
+ */
+async function isRateLimited(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  senderEmail: string,
+): Promise<boolean> {
+  if (!senderEmail) return false;
+  const sinceIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const { count, error } = await supabase
+    .from("email_ingest_log")
+    .select("*", { count: "exact", head: true })
+    .eq("sender_email", senderEmail)
+    .gte("created_at", sinceIso);
+  if (error) {
+    console.warn("Rate-limit query failed, allowing:", error.message);
+    return false;
+  }
+  return (count ?? 0) >= RATE_LIMIT_MAX_PER_HOUR;
+}
+
 // ─── Main handler ────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  };
-
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  // No CORS wildcard — this endpoint is only called by SendGrid (server→server).
+  // We keep no Access-Control headers. OPTIONS returns empty.
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204 });
+  }
+  const corsHeaders: Record<string, string> = {};
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
       status: 405, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -219,9 +342,43 @@ Deno.serve(async (req: Request) => {
   }
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const sourceIp = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null;
 
   try {
-    const formData = await req.formData();
+    // ─── 1. Verify SendGrid signature ──────────────────────────────────────
+    // Read raw body first (formData consumes the stream, so we buffer).
+    const rawBody = await req.text();
+    const signature = req.headers.get("x-twilio-email-event-webhook-signature");
+    const timestamp = req.headers.get("x-twilio-email-event-webhook-timestamp");
+    const sigOk = await verifySendGridSignature(signature, timestamp, rawBody);
+    if (!sigOk) {
+      console.warn("Rejecting inbound email: invalid SendGrid signature");
+      await supabase.from("email_ingest_log").insert({
+        sender_email: "(unverified)",
+        status: "bad_signature",
+        error_message: "SendGrid signature verification failed",
+        source_ip: sourceIp,
+      });
+      return new Response(JSON.stringify({ error: "Invalid signature" }), {
+        status: 401, headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // Re-parse the body as FormData (multipart/form-data from SendGrid)
+    const boundary = req.headers.get("content-type")?.match(/boundary=([^;]+)/)?.[1];
+    if (!boundary) {
+      return new Response(JSON.stringify({ error: "Missing multipart boundary" }), {
+        status: 400, headers: { "Content-Type": "application/json" },
+      });
+    }
+    // Rebuild a Request so we can call .formData() on our buffered body
+    const bodyReq = new Request(req.url, {
+      method: "POST",
+      headers: { "content-type": req.headers.get("content-type")! },
+      body: rawBody,
+    });
+    const formData = await bodyReq.formData();
+
     const from = formData.get("from")?.toString() ?? "";
     const subject = formData.get("subject")?.toString() ?? "";
     const toAddress = formData.get("to")?.toString() ?? "";
@@ -229,9 +386,34 @@ Deno.serve(async (req: Request) => {
 
     console.log(`Inbound: from=${from}, to=${toAddress}, attachments=${numAttachments}`);
 
+    // Extract just the address portion from From: header (strip display name)
+    const senderEmail = from.match(/<([^>]+)>/)?.[1]?.toLowerCase() ?? from.toLowerCase().trim();
+
+    // ─── 2. Rate limit ─────────────────────────────────────────────────────
+    if (await isRateLimited(supabase, senderEmail)) {
+      console.warn(`Rate limited: ${senderEmail} exceeded ${RATE_LIMIT_MAX_PER_HOUR}/hour`);
+      await supabase.from("email_ingest_log").insert({
+        sender_email: senderEmail,
+        recipient_email: toAddress,
+        status: "rate_limited",
+        source_ip: sourceIp,
+      });
+      return new Response(JSON.stringify({ error: "Rate limit exceeded" }), {
+        status: 429, headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // ─── 3. Branch lookup ──────────────────────────────────────────────────
     const codeMatch = toAddress.match(/\+([a-z0-9]+)@/i);
     const emailCode = codeMatch?.[1]?.toLowerCase();
     if (!emailCode) {
+      await supabase.from("email_ingest_log").insert({
+        sender_email: senderEmail,
+        recipient_email: toAddress,
+        status: "no_branch",
+        error_message: "Missing +code tag in recipient",
+        source_ip: sourceIp,
+      });
       return new Response(JSON.stringify({ success: false, error: "Missing branch code" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -244,12 +426,30 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
 
     if (!branch) {
+      await supabase.from("email_ingest_log").insert({
+        sender_email: senderEmail,
+        recipient_email: toAddress,
+        status: "no_branch",
+        error_message: `Unknown code: ${emailCode}`,
+        source_ip: sourceIp,
+      });
       return new Response(JSON.stringify({ success: false, error: `No branch for code ${emailCode}` }), {
         status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     console.log(`Branch: ${branch.name} (${branch.id})`);
+
+    // Log accepted (before heavy work) for rate-limit window tracking
+    await supabase.from("email_ingest_log").insert({
+      sender_email: senderEmail,
+      recipient_email: toAddress,
+      branch_id: branch.id,
+      tenant_id: branch.tenant_id,
+      status: "accepted",
+      attachments_count: numAttachments,
+      source_ip: sourceIp,
+    });
 
     if (numAttachments === 0) {
       return new Response(JSON.stringify({ success: true, message: "No attachments" }), {

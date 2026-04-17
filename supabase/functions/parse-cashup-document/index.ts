@@ -56,15 +56,34 @@ Extract any monetary totals or key financial figures visible in the document.
 Return the primary total amount as a number.`,
 };
 
-Deno.serve(async (req: Request) => {
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
+// Allow-list of origins permitted to call this function from a browser.
+const ALLOWED_ORIGINS = new Set<string>([
+  "https://shiftops.co.za",
+  "https://www.shiftops.co.za",
+  "https://nice-pebble-0f09afc0f.7.azurestaticapps.net",
+  "http://localhost:3000", // dev
+]);
+
+function buildCors(origin: string | null): Record<string, string> {
+  const allowed = origin && ALLOWED_ORIGINS.has(origin) ? origin : "";
+  return {
+    "Access-Control-Allow-Origin": allowed,
+    "Vary": "Origin",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
   };
+}
+
+Deno.serve(async (req: Request) => {
+  const origin = req.headers.get("origin");
+  const corsHeaders = buildCors(origin);
 
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+    // Reject preflight from disallowed origins
+    if (origin && !ALLOWED_ORIGINS.has(origin)) {
+      return new Response(null, { status: 403 });
+    }
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
 
   if (req.method !== "POST") {

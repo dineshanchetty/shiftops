@@ -152,13 +152,17 @@ export function DocumentUpload({
 
   // Load existing documents from DB when cashupId becomes available
   useEffect(() => {
-    if (!cashupId) return;
+    if (!cashupId || !tenantId) return;
     (async () => {
+      // Defense-in-depth: RLS filters by tenant, but we add explicit
+      // tenant_id filter here too so a misconfigured client session
+      // cannot accidentally surface docs from another tenant.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await (supabase as any)
         .from("cashup_documents")
         .select("id, cashup_id, tenant_id, doc_type, file_name, file_size, verification_status, variance_amount, notes, parsed_data")
         .eq("cashup_id", cashupId)
+        .eq("tenant_id", tenantId)
         .order("created_at", { ascending: true });
       if (error) {
         console.error("Failed to load documents:", error.message);
@@ -185,11 +189,13 @@ export function DocumentUpload({
 
   // Convert stored file_data (data URL or raw base64) into a Blob URL
   async function fetchAsBlobUrl(docId: string): Promise<{ blobUrl: string; fileName: string; mimeType: string } | null> {
+    // Defense-in-depth: scope by tenant
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (supabase as any)
       .from("cashup_documents")
       .select("file_data, file_name")
       .eq("id", docId)
+      .eq("tenant_id", tenantId)
       .single();
     if (error || !data?.file_data) {
       console.error("Failed to load file:", error?.message);
@@ -381,7 +387,7 @@ export function DocumentUpload({
   async function handleDelete(id: string) {
     if (cashupId) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabase as any).from("cashup_documents").delete().eq("id", id);
+      await (supabase as any).from("cashup_documents").delete().eq("id", id).eq("tenant_id", tenantId);
     }
     setDocuments((prev) => prev.filter((d) => d.id !== id));
   }
@@ -390,7 +396,7 @@ export function DocumentUpload({
     setDocuments((prev) => prev.map((d) => (d.id === id ? { ...d, notes } : d)));
     if (cashupId) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (supabase as any).from("cashup_documents").update({ notes }).eq("id", id).then(() => {});
+      (supabase as any).from("cashup_documents").update({ notes }).eq("id", id).eq("tenant_id", tenantId).then(() => {});
     }
   }
 
