@@ -473,6 +473,8 @@ export async function getRosteredStaff(
 
     if (!staff) continue;
     if (seen.has(staff.id)) continue;
+    // Exclude managers — they don't have hours recorded on the daily cashup.
+    if (staff.position?.name?.toLowerCase() === "manager") continue;
     seen.add(staff.id);
 
     result.push({

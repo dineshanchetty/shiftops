@@ -37,6 +37,11 @@ export default function RosterPage() {
   // Selected branch operations data
   const [selectedBranchData, setSelectedBranchData] = useState<Branch | null>(null);
 
+  // Shift templates for selected branch (for the dropdown on each staff row)
+  const [shiftTemplates, setShiftTemplates] = useState<Array<{
+    id: string; name: string; shift_start: string; shift_end: string; is_active: boolean;
+  }>>([]);
+
   // Roster data
   const [entries, setEntries] = useState<EntryWithStaff[]>([]);
   const [loading, setLoading] = useState(true);
@@ -146,14 +151,21 @@ export default function RosterPage() {
     async function loadBranchData() {
       if (!filters.branchId) {
         setSelectedBranchData(null);
+        setShiftTemplates([]);
         return;
       }
-      const { data } = await supabase
-        .from("branches")
-        .select("*")
-        .eq("id", filters.branchId)
-        .single();
-      if (data) setSelectedBranchData(data);
+      const [branchRes, templatesRes] = await Promise.all([
+        supabase.from("branches").select("*").eq("id", filters.branchId).single(),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (supabase as any)
+          .from("shift_templates")
+          .select("id, name, shift_start, shift_end, is_active")
+          .eq("branch_id", filters.branchId)
+          .eq("is_active", true)
+          .order("shift_start"),
+      ]);
+      if (branchRes.data) setSelectedBranchData(branchRes.data);
+      setShiftTemplates(templatesRes.data ?? []);
     }
     loadBranchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -284,12 +296,15 @@ export default function RosterPage() {
         entries={entries}
         staff={staff}
         positions={positions}
+        shiftTemplates={shiftTemplates}
         dateRange={dateRange}
         onDateClick={(date) => setEditorDate(date)}
         loading={loading}
         workingDays={selectedBranchData?.working_days ?? undefined}
         openingTime={selectedBranchData?.opening_time ? selectedBranchData.opening_time.slice(0, 5) : undefined}
         closingTime={selectedBranchData?.closing_time ? selectedBranchData.closing_time.slice(0, 5) : undefined}
+        branchId={filters.branchId}
+        tenantId={tenantId}
         onEntryUpdated={loadEntries}
       />
 

@@ -21,9 +21,10 @@ import {
   Check,
 } from "lucide-react";
 import { cn, formatDate } from "@/lib/utils";
+import { ShiftTemplatesTable } from "@/components/settings/shift-templates-table";
 import type { Branch, AuraImport } from "@/lib/types";
 
-type Tab = "general" | "operations" | "aura";
+type Tab = "general" | "operations" | "aura" | "shifts";
 
 const ALL_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -227,6 +228,7 @@ export default function BranchDetailPage() {
           [
             { key: "general", label: "General" },
             { key: "operations", label: "Operations" },
+            { key: "shifts", label: "Shift Templates" },
             { key: "aura", label: "Aura Integration" },
           ] as const
         ).map((t) => (
@@ -356,6 +358,10 @@ export default function BranchDetailPage() {
             </CardContent>
           </Card>
         </div>
+      )}
+
+      {tab === "shifts" && (
+        <ShiftTemplatesTable branchId={branchId} tenantId={branch.tenant_id} />
       )}
 
       {tab === "aura" && (

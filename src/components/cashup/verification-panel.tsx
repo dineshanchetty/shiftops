@@ -120,7 +120,7 @@ export function VerificationPanel({
     setFieldConfirmations((cashupRes.data?.field_confirmations as Record<string, FieldConfirmation>) ?? {});
     setCashupConfirmedAt(cashupRes.data?.confirmed_at ?? null);
     setLoading(false);
-  }, [cashupId, supabase]);
+  }, [cashupId, tenantId, supabase]);
 
   useEffect(() => {
     loadDocs();

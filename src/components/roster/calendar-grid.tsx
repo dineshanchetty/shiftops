@@ -1,10 +1,7 @@
 "use client";
 
-import { useMemo, useState, useRef, useCallback, useEffect } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { formatTime } from "@/lib/utils";
-import { Plus, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/client";
 import type { RosterEntry, Staff, Position } from "@/lib/types";
 
@@ -12,16 +9,27 @@ type EntryWithStaff = RosterEntry & {
   staff: { first_name: string; last_name: string; position_id: string | null; sub_position_id: string | null };
 };
 
+export interface ShiftTemplate {
+  id: string;
+  name: string;
+  shift_start: string;  // "HH:MM" or "HH:MM:SS"
+  shift_end: string;
+  is_active: boolean;
+}
+
 interface CalendarGridProps {
   entries: EntryWithStaff[];
   staff: Staff[];
   positions?: Position[];
+  shiftTemplates?: ShiftTemplate[];
   dateRange: { start: Date; end: Date };
   onDateClick: (date: string) => void;
   loading?: boolean;
   workingDays?: string[];
   openingTime?: string;
   closingTime?: string;
+  branchId?: string;
+  tenantId?: string;
   onEntryUpdated?: () => void;
 }
 
@@ -107,18 +115,6 @@ function parseTimeToMinutes(time: string): number {
   return h * 60 + (m || 0);
 }
 
-/** Convert minutes to "HH:MM" string */
-function minutesToTimeStr(minutes: number): string {
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-}
-
-/** Snap minutes to nearest 15-min interval */
-function snapToQuarter(minutes: number): number {
-  return Math.round(minutes / 15) * 15;
-}
-
 /** Bar color based on position name */
 const GANTT_BAR_COLORS: Record<string, { bg: string; text: string }> = {
   FOH: { bg: "#16A34A", text: "#FFFFFF" },
@@ -129,92 +125,77 @@ const GANTT_BAR_COLORS: Record<string, { bg: string; text: string }> = {
 
 const DEFAULT_BAR_COLOR = { bg: "#9CA3AF", text: "#FFFFFF" };
 
-/* ─── Drag state type ─── */
+/* ─── Daily Detail Panel — auto-list staff + template dropdown ─── */
 
-interface DragState {
-  entryId: string;
-  edge: "start" | "end" | "move";
-  startX: number;
-  originalStartMin: number;
-  originalEndMin: number;
-  currentStartMin: number;
-  currentEndMin: number;
-}
-
-/* ─── Daily Detail Panel (Gantt Timeline) ─── */
-
-function DailyDetailPanel({
-  dateStr,
-  entries,
-  allStaff,
-  positions,
-  onEditShifts,
-  onEntryUpdated,
-  openingTime,
-  closingTime,
-  branchId,
-  tenantId,
-}: {
+interface DailyDetailPanelProps {
   dateStr: string;
   entries: EntryWithStaff[];
   allStaff: Staff[];
   positions: Position[];
+  shiftTemplates: ShiftTemplate[];
   onEditShifts: () => void;
   onEntryUpdated?: () => void;
   openingTime?: string;
   closingTime?: string;
   branchId?: string;
   tenantId?: string;
-}) {
+}
+
+function DailyDetailPanel({
+  dateStr,
+  entries,
+  allStaff,
+  positions,
+  shiftTemplates,
+  openingTime,
+  closingTime,
+  branchId,
+  tenantId,
+  onEntryUpdated,
+}: DailyDetailPanelProps) {
   const supabase = createClient();
-
   const [localEntries, setLocalEntries] = useState<EntryWithStaff[]>(entries);
-  const [dragState, setDragState] = useState<DragState | null>(null);
-  const [savingId, setSavingId] = useState<string | null>(null);
-  const [flashId, setFlashId] = useState<string | null>(null);
-  const [showAddDropdown, setShowAddDropdown] = useState(false);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [savingStaffId, setSavingStaffId] = useState<string | null>(null);
 
-  const timelineRef = useRef<HTMLDivElement>(null);
-  const dragStateRef = useRef<DragState | null>(null);
-
-  // Sync local entries when parent entries change
   useEffect(() => {
     setLocalEntries(entries);
   }, [entries]);
 
-  // Split into managers vs regular staff
+  // Identify managers
   const managerPosId = positions?.find((p) => p.name.toLowerCase() === "manager")?.id;
-  const isManager = (e: EntryWithStaff) => managerPosId && e.staff.position_id === managerPosId;
 
-  const workingEntries = localEntries.filter((e) => !e.is_off);
-  const offEntries = localEntries.filter((e) => e.is_off);
+  // Active templates only, sorted by start time
+  const activeTemplates = useMemo(
+    () => [...shiftTemplates].filter((t) => t.is_active).sort((a, b) => a.shift_start.localeCompare(b.shift_start)),
+    [shiftTemplates]
+  );
 
-  const managerWorking = workingEntries.filter(isManager);
-  const managerOff = offEntries.filter(isManager);
-  const staffWorking = workingEntries.filter((e) => !isManager(e));
-  const staffOff = offEntries.filter((e) => !isManager(e));
+  // Build entry-by-staff map for O(1) lookup
+  const entryByStaff = useMemo(() => {
+    const m = new Map<string, EntryWithStaff>();
+    for (const e of localEntries) m.set(e.staff_id, e);
+    return m;
+  }, [localEntries]);
 
-  const totalHours = workingEntries.reduce((sum, e) => sum + (e.shift_hours ?? 0), 0);
-  const staffCount = workingEntries.length;
+  // Active staff for this branch
+  const activeStaff = useMemo(
+    () => allStaff.filter((s) => s.active !== false),
+    [allStaff]
+  );
 
-  // Timeline range
+  const managerStaff = activeStaff.filter((s) => managerPosId && s.position_id === managerPosId);
+  const regularStaff = activeStaff.filter((s) => !managerPosId || s.position_id !== managerPosId);
+
+  // Timeline range for the visual Gantt
   const rangeStartMin = parseTimeToMinutes(openingTime ?? "06:00");
   const rangeEndMin = parseTimeToMinutes(closingTime ?? "23:00");
   const totalRangeMin = rangeEndMin - rangeStartMin;
 
-  // Generate hour markers
-  const startHour = Math.floor(rangeStartMin / 60);
-  const endHour = Math.ceil(rangeEndMin / 60);
   const hours: number[] = [];
-  for (let h = startHour; h <= endHour; h++) {
-    hours.push(h);
-  }
+  for (let h = Math.floor(rangeStartMin / 60); h <= Math.ceil(rangeEndMin / 60); h++) hours.push(h);
 
-  // Current time indicator (only if viewing today)
   const today = new Date();
-  const todayStr = toDateStr(today);
-  const isToday = dateStr === todayStr;
+  const isToday = dateStr === toDateStr(today);
   let currentTimePercent: number | null = null;
   if (isToday) {
     const nowMin = today.getHours() * 60 + today.getMinutes();
@@ -223,305 +204,184 @@ function DailyDetailPanel({
     }
   }
 
-  // Staff already on this date (exclude from "add" dropdown)
-  const scheduledStaffIds = new Set(localEntries.map((e) => e.staff_id));
-  const availableStaff = allStaff.filter((s) => !scheduledStaffIds.has(s.id));
+  // ─── Apply selection ──────────────────────────────────────────────────────
+  // value codes: ""=not scheduled, "off"=leave/off, "<templateId>"=working that template
 
-  // ─── Drag logic ───
-
-  const handleMouseDown = useCallback((
-    e: React.MouseEvent,
-    entry: EntryWithStaff,
-    edge: "start" | "end" | "move"
-  ) => {
-    if (!entry.shift_start || !entry.shift_end) return;
-    e.preventDefault();
-    e.stopPropagation();
-
-    const startMin = parseTimeToMinutes(entry.shift_start);
-    const endMin = parseTimeToMinutes(entry.shift_end);
-
-    const state: DragState = {
-      entryId: entry.id,
-      edge,
-      startX: e.clientX,
-      originalStartMin: startMin,
-      originalEndMin: endMin,
-      currentStartMin: startMin,
-      currentEndMin: endMin,
-    };
-    dragStateRef.current = state;
-    setDragState(state);
-  }, []);
-
-  const handleMouseMove = useCallback((e: MouseEvent) => {
-    const ds = dragStateRef.current;
-    if (!ds || !timelineRef.current) return;
-
-    const timelineWidth = timelineRef.current.getBoundingClientRect().width;
-    const deltaX = e.clientX - ds.startX;
-    const deltaMin = (deltaX / timelineWidth) * totalRangeMin;
-
-    let newStartMin = ds.originalStartMin;
-    let newEndMin = ds.originalEndMin;
-    const duration = ds.originalEndMin - ds.originalStartMin;
-
-    if (ds.edge === "move") {
-      newStartMin = snapToQuarter(ds.originalStartMin + deltaMin);
-      newEndMin = newStartMin + duration;
-    } else if (ds.edge === "start") {
-      newStartMin = snapToQuarter(ds.originalStartMin + deltaMin);
-      newEndMin = ds.originalEndMin;
-    } else {
-      newStartMin = ds.originalStartMin;
-      newEndMin = snapToQuarter(ds.originalEndMin + deltaMin);
-    }
-
-    // Clamp to range and ensure minimum 15 min
-    newStartMin = Math.max(rangeStartMin, Math.min(newStartMin, rangeEndMin - 15));
-    newEndMin = Math.max(newStartMin + 15, Math.min(newEndMin, rangeEndMin));
-
-    const updated: DragState = { ...ds, currentStartMin: newStartMin, currentEndMin: newEndMin };
-    dragStateRef.current = updated;
-    setDragState({ ...updated });
-  }, [rangeStartMin, rangeEndMin, totalRangeMin]);
-
-  const handleMouseUp = useCallback(async () => {
-    const ds = dragStateRef.current;
-    if (!ds) return;
-    dragStateRef.current = null;
-    setDragState(null);
-
-    const { entryId, currentStartMin, currentEndMin, originalStartMin, originalEndMin } = ds;
-
-    // No change — do nothing
-    if (currentStartMin === originalStartMin && currentEndMin === originalEndMin) return;
-
-    const newStart = minutesToTimeStr(currentStartMin);
-    const newEnd = minutesToTimeStr(currentEndMin);
-    const newHours = Math.round((currentEndMin - currentStartMin) / 60 * 100) / 100;
-
-    // Optimistic update
-    setLocalEntries((prev) =>
-      prev.map((e) =>
-        e.id === entryId
-          ? { ...e, shift_start: newStart, shift_end: newEnd, shift_hours: newHours }
-          : e
-      )
-    );
-
-    setSavingId(entryId);
-    const { error } = await supabase
-      .from("roster_entries")
-      .update({ shift_start: newStart, shift_end: newEnd, shift_hours: newHours })
-      .eq("id", entryId);
-    setSavingId(null);
-
-    if (!error) {
-      setFlashId(entryId);
-      setTimeout(() => setFlashId(null), 800);
-      onEntryUpdated?.();
-    } else {
-      // Revert on error
-      setLocalEntries((prev) =>
-        prev.map((e) =>
-          e.id === entryId
-            ? { ...e, shift_start: minutesToTimeStr(originalStartMin), shift_end: minutesToTimeStr(originalEndMin), shift_hours: Math.round((originalEndMin - originalStartMin) / 60 * 100) / 100 }
-            : e
-        )
-      );
-    }
-  }, [supabase, onEntryUpdated]);
-
-  // Attach global mouse events while dragging
-  useEffect(() => {
-    if (!dragState) return;
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [dragState, handleMouseMove, handleMouseUp]);
-
-  // ─── Add staff ───
-
-  async function handleAddStaff(staffMember: Staff) {
+  async function handleSelect(staffId: string, value: string) {
     if (!branchId || !tenantId) return;
-    setShowAddDropdown(false);
+    setSavingStaffId(staffId);
 
-    const defaultStart = openingTime ? openingTime.slice(0, 5) : "09:00";
-    const defaultEnd = closingTime ? closingTime.slice(0, 5) : "17:00";
-    const startMin = parseTimeToMinutes(defaultStart);
-    const endMin = parseTimeToMinutes(defaultEnd);
-    const hours = Math.max(0, (endMin - startMin) / 60);
+    const existing = entryByStaff.get(staffId);
 
-    const newEntry = {
-      branch_id: branchId,
-      tenant_id: tenantId,
-      staff_id: staffMember.id,
-      date: dateStr,
-      shift_start: defaultStart,
-      shift_end: defaultEnd,
-      shift_hours: hours,
-      is_off: false,
-    };
+    try {
+      if (value === "") {
+        // Not scheduled: delete row if it exists
+        if (existing) {
+          await supabase.from("roster_entries").delete().eq("id", existing.id);
+          setLocalEntries((prev) => prev.filter((e) => e.id !== existing.id));
+        }
+      } else if (value === "off") {
+        // OFF / Leave: upsert with is_off=true
+        const payload = {
+          staff_id: staffId,
+          branch_id: branchId,
+          tenant_id: tenantId,
+          date: dateStr,
+          shift_start: null,
+          shift_end: null,
+          shift_hours: null,
+          is_off: true,
+        };
+        if (existing) {
+          await supabase.from("roster_entries").update(payload).eq("id", existing.id);
+          setLocalEntries((prev) => prev.map((e) => e.id === existing.id ? { ...e, ...payload } as EntryWithStaff : e));
+        } else {
+          const { data } = await supabase.from("roster_entries").insert(payload).select("*").single();
+          if (data) {
+            const staffRec = allStaff.find((s) => s.id === staffId);
+            if (staffRec) {
+              setLocalEntries((prev) => [...prev, { ...(data as RosterEntry), staff: { first_name: staffRec.first_name, last_name: staffRec.last_name, position_id: staffRec.position_id, sub_position_id: staffRec.sub_position_id ?? null } } as EntryWithStaff]);
+            }
+          }
+        }
+      } else {
+        // Template: upsert with template times
+        const tmpl = activeTemplates.find((t) => t.id === value);
+        if (!tmpl) return;
+        const start = tmpl.shift_start.slice(0, 5);
+        const end = tmpl.shift_end.slice(0, 5);
+        const [sh, sm] = start.split(":").map(Number);
+        const [eh, em] = end.split(":").map(Number);
+        const hours = Math.max(0, (eh * 60 + em - sh * 60 - sm) / 60);
 
-    const { data, error } = await supabase
-      .from("roster_entries")
-      .insert(newEntry)
-      .select()
-      .single();
-
-    if (!error && data) {
-      const entryWithStaff: EntryWithStaff = {
-        ...data,
-        staff: {
-          first_name: staffMember.first_name,
-          last_name: staffMember.last_name,
-          position_id: staffMember.position_id,
-          sub_position_id: staffMember.sub_position_id,
-        },
-      };
-      setLocalEntries((prev) => [...prev, entryWithStaff]);
+        const payload = {
+          staff_id: staffId,
+          branch_id: branchId,
+          tenant_id: tenantId,
+          date: dateStr,
+          shift_start: tmpl.shift_start,
+          shift_end: tmpl.shift_end,
+          shift_hours: hours,
+          is_off: false,
+        };
+        if (existing) {
+          await supabase.from("roster_entries").update(payload).eq("id", existing.id);
+          setLocalEntries((prev) => prev.map((e) => e.id === existing.id ? { ...e, ...payload } as EntryWithStaff : e));
+        } else {
+          const { data } = await supabase.from("roster_entries").insert(payload).select("*").single();
+          if (data) {
+            const staffRec = allStaff.find((s) => s.id === staffId);
+            if (staffRec) {
+              setLocalEntries((prev) => [...prev, { ...(data as RosterEntry), staff: { first_name: staffRec.first_name, last_name: staffRec.last_name, position_id: staffRec.position_id, sub_position_id: staffRec.sub_position_id ?? null } } as EntryWithStaff]);
+            }
+          }
+        }
+      }
       onEntryUpdated?.();
+    } finally {
+      setSavingStaffId(null);
     }
   }
 
-  // ─── Remove staff ───
+  // Format template label e.g. "Morning · 06:00–14:00"
+  const tmplLabel = (t: ShiftTemplate) => `${t.name} · ${t.shift_start.slice(0, 5)}–${t.shift_end.slice(0, 5)}`;
 
-  async function handleRemoveEntry(entryId: string) {
-    setConfirmDeleteId(null);
-    const { error } = await supabase
-      .from("roster_entries")
-      .delete()
-      .eq("id", entryId);
-
-    if (!error) {
-      setLocalEntries((prev) => prev.filter((e) => e.id !== entryId));
-      onEntryUpdated?.();
-    }
-  }
-
-  // ─── Compute bar position from drag or entry data ───
-
-  function getBarProps(entry: EntryWithStaff): { barLeft: number; barWidth: number; hasBar: boolean; startMin: number; endMin: number } {
-    const isDragging = dragState?.entryId === entry.id;
-
-    let startMin: number;
-    let endMin: number;
-
-    if (isDragging && dragState) {
-      startMin = dragState.currentStartMin;
-      endMin = dragState.currentEndMin;
-    } else if (entry.shift_start && entry.shift_end) {
-      startMin = parseTimeToMinutes(entry.shift_start);
-      endMin = parseTimeToMinutes(entry.shift_end);
-    } else {
-      return { barLeft: 0, barWidth: 0, hasBar: false, startMin: 0, endMin: 0 };
-    }
-
-    const barLeft = Math.max(0, ((startMin - rangeStartMin) / totalRangeMin) * 100);
-    const barWidth = Math.min(100 - barLeft, ((endMin - startMin) / totalRangeMin) * 100);
-
-    return { barLeft, barWidth, hasBar: barWidth > 0, startMin, endMin };
-  }
-
-  // ─── Cursor based on drag edge ───
-
-  const cursorStyle = dragState
-    ? dragState.edge === "move" ? "cursor-grabbing" : "cursor-col-resize"
-    : "";
-
-  // ─── Render helpers for Gantt rows ───
-
-  function renderGanttRow(entry: EntryWithStaff) {
-    const posName = getPositionName(entry.staff.position_id, positions);
+  // Render a single staff row with dropdown + Gantt visualization
+  function renderRow(s: Staff) {
+    const entry = entryByStaff.get(s.id);
+    const posName = getPositionName(s.position_id, positions);
     const colors = posName ? GANTT_BAR_COLORS[posName] ?? DEFAULT_BAR_COLOR : DEFAULT_BAR_COLOR;
-    const label = `${entry.staff.first_name} ${entry.staff.last_name?.[0] ?? ""}.`;
-    const isDragging = dragState?.entryId === entry.id;
-    const isSaving = savingId === entry.id;
-    const isFlashing = flashId === entry.id;
-    const { barLeft, barWidth, hasBar, startMin, endMin } = getBarProps(entry);
-    const tooltipText = isDragging
-      ? `${minutesToTimeStr(startMin)} – ${minutesToTimeStr(endMin)}`
-      : `${entry.shift_start ? formatTime(entry.shift_start) : "--:--"} – ${entry.shift_end ? formatTime(entry.shift_end) : "--:--"}`;
-    const fStart = entry.shift_start ? formatTime(entry.shift_start) : "--:--";
-    const fEnd = entry.shift_end ? formatTime(entry.shift_end) : "--:--";
-    const hoursVal = entry.shift_hours ?? 0;
+    const isSaving = savingStaffId === s.id;
+
+    let value = "";
+    if (entry?.is_off) value = "off";
+    else if (entry?.shift_start && entry?.shift_end) {
+      // Match a template by start+end
+      const matched = activeTemplates.find((t) =>
+        t.shift_start.slice(0, 5) === entry.shift_start!.slice(0, 5) &&
+        t.shift_end.slice(0, 5) === entry.shift_end!.slice(0, 5)
+      );
+      if (matched) value = matched.id;
+      else value = "custom"; // pre-existing custom shift
+    }
+
+    // Compute bar position
+    let barLeft = 0;
+    let barWidth = 0;
+    let hasBar = false;
+    if (!entry?.is_off && entry?.shift_start && entry?.shift_end) {
+      const sMin = parseTimeToMinutes(entry.shift_start);
+      const eMin = parseTimeToMinutes(entry.shift_end);
+      barLeft = Math.max(0, ((sMin - rangeStartMin) / totalRangeMin) * 100);
+      barWidth = Math.min(100 - barLeft, ((eMin - sMin) / totalRangeMin) * 100);
+      hasBar = barWidth > 0;
+    }
 
     return (
-      <div key={entry.id} className="flex items-center group">
-        <div className="w-[140px] sm:w-[180px] shrink-0 pr-3 py-1">
+      <div key={s.id} className="flex items-center gap-2 py-1">
+        <div className="w-[160px] sm:w-[200px] shrink-0 pr-2">
           <div className="flex items-center gap-1.5">
             <span className="inline-block h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: colors.bg }} />
-            <select
-              className="text-xs font-medium text-base-700 bg-transparent border-none outline-none cursor-pointer truncate max-w-[120px] sm:max-w-[150px] hover:text-accent appearance-none"
-              value={entry.staff_id}
-              onChange={async (e) => {
-                const newStaffId = e.target.value;
-                if (newStaffId === entry.staff_id) return;
-                const newStaff = allStaff.find(s => s.id === newStaffId);
-                if (!newStaff) return;
-                setLocalEntries(prev => prev.map(le =>
-                  le.id === entry.id
-                    ? { ...le, staff_id: newStaffId, staff: { first_name: newStaff.first_name, last_name: newStaff.last_name, position_id: newStaff.position_id, sub_position_id: newStaff.sub_position_id ?? null } }
-                    : le
-                ));
-                await supabase.from("roster_entries").update({ staff_id: newStaffId }).eq("id", entry.id);
-                onEntryUpdated?.();
-              }}
-            >
-              <option value={entry.staff_id}>{entry.staff.first_name} {entry.staff.last_name.charAt(0)}.</option>
-              {allStaff
-                .filter(s => s.id !== entry.staff_id && !localEntries.some(le => le.staff_id === s.id && le.id !== entry.id))
-                .map(s => (<option key={s.id} value={s.id}>{s.first_name} {s.last_name.charAt(0)}.</option>))
-              }
-            </select>
+            <span className="text-xs font-medium text-base-700 truncate">
+              {s.first_name} {s.last_name?.[0] ?? ""}.
+            </span>
           </div>
         </div>
-        <div className="flex-1 relative h-[36px]">
+
+        {/* Dropdown */}
+        <div className="w-[180px] shrink-0">
+          <select
+            value={value === "custom" ? "" : value}
+            onChange={(e) => handleSelect(s.id, e.target.value)}
+            disabled={isSaving}
+            className={cn(
+              "w-full text-xs rounded-md border bg-white px-2 py-1 outline-none transition-colors",
+              entry?.is_off ? "border-amber-300 bg-amber-50 text-amber-700" :
+              hasBar ? "border-base-200 text-base-700" :
+              "border-gray-200 text-gray-400"
+            )}
+          >
+            <option value="">— Not scheduled —</option>
+            {activeTemplates.map((t) => (
+              <option key={t.id} value={t.id}>{tmplLabel(t)}</option>
+            ))}
+            <option value="off">Leave / OFF</option>
+            {value === "custom" && (
+              <option value="custom" disabled>
+                Custom: {entry!.shift_start!.slice(0,5)}–{entry!.shift_end!.slice(0,5)}
+              </option>
+            )}
+          </select>
+        </div>
+
+        {/* Gantt visualization (read-only) */}
+        <div className="flex-1 relative h-[28px]">
           {hours.map((h) => {
             const pct = ((h * 60 - rangeStartMin) / totalRangeMin) * 100;
             if (pct <= 0 || pct >= 100) return null;
-            return <div key={h} className="absolute top-0 bottom-0 w-px bg-gray-100" style={{ left: `${pct}%` }} />;
+            return (
+              <div key={h} className="absolute top-0 bottom-0 w-px bg-gray-100" style={{ left: `${pct}%` }} />
+            );
           })}
           {currentTimePercent !== null && (
             <div className="absolute top-0 bottom-0 w-px border-l border-dashed border-red-500 z-10" style={{ left: `${currentTimePercent}%` }} />
           )}
           {hasBar && (
             <div
-              className={cn(
-                "absolute top-[4px] h-[28px] rounded-md shadow-sm flex items-center px-2 overflow-visible select-none",
-                isSaving && "opacity-60",
-                isFlashing && "ring-2 ring-offset-1 ring-accent",
-                isDragging ? "opacity-80 z-20" : "z-10"
-              )}
-              style={{ left: `${barLeft}%`, width: `${barWidth}%`, backgroundColor: colors.bg, transition: isDragging ? "none" : undefined }}
-              title={`${entry.staff.first_name} ${entry.staff.last_name} | ${posName ?? "—"} | ${fStart}–${fEnd} (${Math.round(hoursVal)}h)`}
+              className="absolute top-[3px] h-[22px] rounded-md shadow-sm flex items-center px-2 select-none"
+              style={{ left: `${barLeft}%`, width: `${barWidth}%`, backgroundColor: colors.bg }}
+              title={`${entry!.shift_start!.slice(0,5)}–${entry!.shift_end!.slice(0,5)}`}
             >
-              <div className="absolute left-0 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-10" onMouseDown={(e) => handleMouseDown(e, entry, "start")}>
-                <div className="w-0.5 h-3 bg-white/50 rounded-full" />
-              </div>
-              <div className="absolute inset-x-3 top-0 bottom-0 cursor-grab active:cursor-grabbing flex items-center px-1" onMouseDown={(e) => handleMouseDown(e, entry, "move")}>
-                {barWidth > 8 && <span className="text-[10px] font-medium truncate leading-none pointer-events-none" style={{ color: colors.text }}>{label}</span>}
-              </div>
-              <div className="absolute right-0 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-10" onMouseDown={(e) => handleMouseDown(e, entry, "end")}>
-                <div className="w-0.5 h-3 bg-white/50 rounded-full" />
-              </div>
-              {!isDragging && (
-                <button className="absolute -top-2 -right-2 h-4 w-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20 shadow" onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(entry.id); }} title="Remove shift">
-                  <X size={8} />
-                </button>
-              )}
-              {isDragging && (
-                <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-gray-900 text-white text-[10px] font-mono px-2 py-1 rounded whitespace-nowrap z-30 shadow-lg">{tooltipText}</div>
+              {barWidth > 8 && (
+                <span className="text-[10px] font-medium leading-none truncate" style={{ color: colors.text }}>
+                  {entry!.shift_start!.slice(0,5)}–{entry!.shift_end!.slice(0,5)}
+                </span>
               )}
             </div>
           )}
-          {!hasBar && (
+          {entry?.is_off && (
             <div className="absolute inset-0 flex items-center">
-              <span className="text-[10px] text-base-400 font-mono">{fStart}–{fEnd}</span>
+              <span className="text-[10px] font-bold text-amber-600 bg-amber-100 rounded px-1.5 py-0.5">OFF / LEAVE</span>
             </div>
           )}
         </div>
@@ -529,204 +389,102 @@ function DailyDetailPanel({
     );
   }
 
-  function renderOffRow(entry: EntryWithStaff) {
-    return (
-      <div key={entry.id} className="flex items-center group opacity-50">
-        <div className="w-[140px] sm:w-[180px] shrink-0 pr-3 py-1">
-          <div className="flex items-center gap-2">
-            <span className="inline-block h-2 w-2 rounded-full shrink-0 bg-gray-300" />
-            <span className="text-xs font-medium text-base-400 truncate line-through">
-              {entry.staff.first_name} {entry.staff.last_name}
-            </span>
-          </div>
-        </div>
-        <div className="flex-1 relative h-[36px]">
-          {hours.map((h) => {
-            const pct = ((h * 60 - rangeStartMin) / totalRangeMin) * 100;
-            if (pct <= 0 || pct >= 100) return null;
-            return <div key={h} className="absolute top-0 bottom-0 w-px bg-gray-100" style={{ left: `${pct}%` }} />;
-          })}
-          <div className="absolute inset-0 flex items-center">
-            <span className="text-[10px] font-semibold text-base-400 bg-base-100 rounded px-1.5 py-0.5">OFF</span>
-          </div>
-          <button
-            className="absolute right-1 top-1/2 -translate-y-1/2 h-4 w-4 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20 shadow"
-            onClick={() => setConfirmDeleteId(entry.id)}
-            title="Remove"
-          >
-            <X size={8} />
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // Stats
+  const workingCount = localEntries.filter((e) => !e.is_off && e.shift_start).length;
+  const offCount = localEntries.filter((e) => e.is_off).length;
+  const totalHours = localEntries.reduce((s, e) => s + (e.shift_hours ?? 0), 0);
+
+  const noTemplates = activeTemplates.length === 0;
 
   return (
-    <div className={cn("border-t border-base-200 bg-surface rounded-b-xl overflow-hidden", cursorStyle)}>
+    <div className="border-t border-base-200 bg-surface rounded-b-xl overflow-hidden">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4 border-b border-base-200">
         <div>
-          <h3 className="text-base font-semibold text-base-900">
-            {formatFullDate(dateStr)}
-          </h3>
+          <h3 className="text-base font-semibold text-base-900">{formatFullDate(dateStr)}</h3>
           <p className="text-sm text-base-500 mt-0.5">
-            {managerWorking.length > 0 && (
-              <span className="text-purple-600 font-medium">{managerWorking.length} mgr{managerWorking.length !== 1 ? 's' : ''}</span>
-            )}
-            {managerWorking.length > 0 && staffWorking.length > 0 && ' · '}
-            {staffWorking.length > 0 && (
-              <span>{staffWorking.length} staff</span>
-            )}
-            {staffCount === 0 && <span>0 staff</span>}
-            {' · '}{Math.round(totalHours)}h total
+            {workingCount} on · {offCount} off · {Math.round(totalHours)}h total
           </p>
         </div>
-        {/* Staff can be swapped via dropdown on each bar */}
       </div>
 
-      {/* Gantt Timeline */}
-      <div className="px-4 sm:px-6 py-3">
-        {localEntries.length === 0 ? (
-          <div className="py-8 text-center">
-            <p className="text-sm text-base-400 mb-3">No shifts scheduled</p>
-            <Button variant="secondary" size="sm" onClick={onEditShifts}>
-              <Plus size={14} />
-              Add Shifts
-            </Button>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <div className="min-w-[600px]">
-              {/* Hour header row */}
-              <div className="flex">
-                <div className="w-[140px] sm:w-[180px] shrink-0" />
-                <div ref={timelineRef} className="flex-1 relative h-6">
-                  {hours.map((h) => {
-                    const pct = ((h * 60 - rangeStartMin) / totalRangeMin) * 100;
-                    if (pct < 0 || pct > 100) return null;
-                    return (
-                      <span
-                        key={h}
-                        className="absolute text-[10px] font-mono text-base-400 -translate-x-1/2"
-                        style={{ left: `${pct}%` }}
-                      >
-                        {String(h).padStart(2, "0")}
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* ── Managers Section ── */}
-              {(managerWorking.length > 0 || managerOff.length > 0) && (
-                <div className="mb-2">
-                  <div className="flex items-center gap-2 py-1.5 border-b border-purple-200 mb-1">
-                    <span className="inline-block h-2 w-2 rounded-full bg-purple-500" />
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-purple-600">
-                      Managers
-                    </span>
-                    <span className="text-[10px] text-purple-400 ml-1">
-                      {managerWorking.length} on · {managerOff.length} off
-                    </span>
-                  </div>
-                  <div className="bg-purple-50/30 rounded-md px-1">
-                    {managerWorking.map((entry) => renderGanttRow(entry))}
-                    {managerOff.map((entry) => renderOffRow(entry))}
-                  </div>
-                </div>
-              )}
-
-              {/* ── Staff Section ── */}
-              {(staffWorking.length > 0 || staffOff.length > 0) && (
-                <div className="mb-2">
-                  <div className="flex items-center gap-2 py-1.5 border-b border-blue-200 mb-1">
-                    <span className="inline-block h-2 w-2 rounded-full bg-blue-500" />
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-blue-600">
-                      Staff
-                    </span>
-                    <span className="text-[10px] text-blue-400 ml-1">
-                      {staffWorking.length} on · {staffOff.length} off
-                    </span>
-                  </div>
-                  {staffWorking.map((entry) => renderGanttRow(entry))}
-                  {staffOff.map((entry) => renderOffRow(entry))}
-                </div>
-              )}
-
-              {/* Fallback: render unsectioned if no manager/staff split applies */}
-              {managerWorking.length === 0 && managerOff.length === 0 && staffWorking.length === 0 && staffOff.length === 0 && workingEntries.map((entry) => renderGanttRow(entry))}
-
-              {managerWorking.length === 0 && managerOff.length === 0 && staffWorking.length === 0 && staffOff.length === 0 && offEntries.map((entry) => renderOffRow(entry))}
-
-              {/* Add Staff row */}
-              <div className="mt-3 flex items-center gap-2 relative">
-                <button
-                  className="flex items-center gap-1.5 rounded-md border border-dashed border-base-300 px-3 py-1.5 text-xs text-base-500 hover:border-accent hover:text-accent transition-colors"
-                  onClick={() => setShowAddDropdown((v) => !v)}
-                >
-                  <Plus size={12} />
-                  Add Staff
-                </button>
-
-                {showAddDropdown && (
-                  <div className="absolute left-0 top-full mt-1 w-56 rounded-lg border border-base-200 bg-white shadow-lg z-30 max-h-48 overflow-y-auto">
-                    {availableStaff.length === 0 ? (
-                      <div className="px-3 py-2 text-xs text-base-400">All staff scheduled</div>
-                    ) : (
-                      availableStaff.map((s) => (
-                        <button
-                          key={s.id}
-                          className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 transition-colors"
-                          onClick={() => handleAddStaff(s)}
-                        >
-                          {s.first_name} {s.last_name}
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Confirm delete dialog */}
-      {confirmDeleteId && (
-        <div className="mx-4 sm:mx-6 mb-4 rounded-lg border border-red-200 bg-red-50 p-3 flex items-center justify-between gap-3">
-          <p className="text-sm text-red-700">Remove this shift entry?</p>
-          <div className="flex gap-2">
-            <button
-              className="text-xs px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 transition-colors"
-              onClick={() => handleRemoveEntry(confirmDeleteId)}
-            >
-              Remove
-            </button>
-            <button
-              className="text-xs px-2 py-1 rounded border border-gray-200 text-base-600 hover:bg-gray-100 transition-colors"
-              onClick={() => setConfirmDeleteId(null)}
-            >
-              Cancel
-            </button>
-          </div>
+      {/* No templates warning */}
+      {noTemplates && (
+        <div className="mx-4 sm:mx-6 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          No shift templates defined for this branch. Add some in <strong>Settings → Branches → Shift Templates</strong>.
         </div>
       )}
+
+      {/* Hour header */}
+      <div className="px-4 sm:px-6 pt-3">
+        <div className="overflow-x-auto">
+          <div className="min-w-[680px]">
+            <div className="flex items-center gap-2 pb-2 border-b border-base-100">
+              <div className="w-[160px] sm:w-[200px] shrink-0 pr-2 text-[10px] font-semibold uppercase tracking-wider text-base-400">Staff</div>
+              <div className="w-[180px] shrink-0 text-[10px] font-semibold uppercase tracking-wider text-base-400">Shift</div>
+              <div className="flex-1 relative h-5">
+                {hours.map((h) => {
+                  const pct = ((h * 60 - rangeStartMin) / totalRangeMin) * 100;
+                  if (pct < 0 || pct > 100) return null;
+                  return (
+                    <span key={h} className="absolute text-[10px] font-mono text-base-400 -translate-x-1/2" style={{ left: `${pct}%` }}>
+                      {String(h).padStart(2, "0")}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Managers section */}
+            {managerStaff.length > 0 && (
+              <div className="mb-2 mt-2">
+                <div className="flex items-center gap-2 py-1.5 border-b border-purple-200 mb-1">
+                  <span className="inline-block h-2 w-2 rounded-full bg-purple-500" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-purple-600">Managers</span>
+                </div>
+                <div className="bg-purple-50/30 rounded-md px-1">
+                  {managerStaff.map((s) => renderRow(s))}
+                </div>
+              </div>
+            )}
+
+            {/* Staff section */}
+            {regularStaff.length > 0 && (
+              <div className="mb-2 mt-2">
+                <div className="flex items-center gap-2 py-1.5 border-b border-blue-200 mb-1">
+                  <span className="inline-block h-2 w-2 rounded-full bg-blue-500" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-blue-600">Staff</span>
+                </div>
+                {regularStaff.map((s) => renderRow(s))}
+              </div>
+            )}
+
+            {activeStaff.length === 0 && (
+              <div className="py-8 text-center text-sm text-base-400">
+                No active staff for this branch.
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
-
 /* ─── Main CalendarGrid ─── */
 
 export function CalendarGrid({
   entries,
   staff,
   positions = [],
+  shiftTemplates = [],
   dateRange,
   onDateClick,
   loading = false,
   workingDays,
   openingTime,
   closingTime,
+  branchId,
+  tenantId,
   onEntryUpdated,
 }: CalendarGridProps) {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -777,14 +535,11 @@ export function CalendarGrid({
     [selectedDate, entriesByDate]
   );
 
-  // Derive branchId and tenantId from entries (any entry for this date)
-  const { branchId, tenantId } = useMemo(() => {
-    const anyEntry = entries[0];
-    return {
-      branchId: anyEntry?.branch_id,
-      tenantId: anyEntry?.tenant_id,
-    };
-  }, [entries]);
+  // branchId & tenantId come from props now (used to be derived from entries[0],
+  // but that broke when there were no entries for the day yet).
+  // Fall back to inferring from any entry only if props are missing (legacy callers).
+  const effectiveBranchId = branchId ?? entries[0]?.branch_id;
+  const effectiveTenantId = tenantId ?? entries[0]?.tenant_id;
 
   if (loading) {
     return (
@@ -991,12 +746,13 @@ export function CalendarGrid({
           entries={selectedEntries}
           allStaff={staff}
           positions={positions}
+          shiftTemplates={shiftTemplates}
           onEditShifts={handleEditShifts}
           onEntryUpdated={onEntryUpdated}
           openingTime={openingTime}
           closingTime={closingTime}
-          branchId={branchId}
-          tenantId={tenantId}
+          branchId={effectiveBranchId}
+          tenantId={effectiveTenantId}
         />
       )}
     </div>

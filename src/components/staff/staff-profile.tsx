@@ -6,6 +6,7 @@ import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { createClient } from "@/lib/supabase/client";
+import { RateHistory } from "@/components/staff/rate-history";
 import type { Staff, Position, SubPosition, Branch } from "@/lib/types";
 
 interface StaffProfileProps {
@@ -260,6 +261,11 @@ export function StaffProfile({
                 onChange={(e) => update("start_date", e.target.value)}
               />
             </div>
+          </section>
+
+          {/* Hourly Rate */}
+          <section>
+            <RateHistory staffId={staff.id} tenantId={staff.tenant_id} />
           </section>
 
           {/* Danger Zone */}
