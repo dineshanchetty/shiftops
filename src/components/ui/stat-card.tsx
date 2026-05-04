@@ -6,10 +6,12 @@ export interface StatCardProps extends React.HTMLAttributes<HTMLDivElement> {
   value: string | number;
   delta?: number;
   icon?: React.ReactNode;
+  /** Optional small footer line, e.g. "vs Prev Yr R12,345 (+47%)" */
+  footer?: React.ReactNode;
 }
 
 const StatCard = React.forwardRef<HTMLDivElement, StatCardProps>(
-  ({ className, label, value, delta, icon, ...props }, ref) => {
+  ({ className, label, value, delta, icon, footer, ...props }, ref) => {
     const isPositive = delta !== undefined && delta >= 0;
     const isNegative = delta !== undefined && delta < 0;
 
@@ -83,6 +85,9 @@ const StatCard = React.forwardRef<HTMLDivElement, StatCardProps>(
               </span>
             )}
           </div>
+        )}
+        {footer && (
+          <div className="mt-2 text-[11px] text-base-500 leading-tight">{footer}</div>
         )}
       </div>
     );

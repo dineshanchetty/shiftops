@@ -569,6 +569,39 @@ async function buildPlan(pdfs, mapping) {
         staffByName.set(full, s.id);
       }
 
+      // Auto-create missing staff (inactive, no rate) if --create-missing-staff
+      const autoCreate = createMissingStaff || mapping.create_missing_staff;
+      if (autoCreate) {
+        // Identify all unique staff names from the payroll rows that aren't in DB
+        const allNames = new Set();
+        for (const row of data.rows ?? []) {
+          for (const name of Object.keys(row.hours_by_staff ?? {})) allNames.add(name);
+        }
+        for (const name of allNames) {
+          const norm = normalizeName(name);
+          if (staffByName.has(norm)) continue;
+          if (mapping.staff_map?.[name]) continue;
+          // Split name into first + last (last token = surname, rest = first name)
+          const parts = name.trim().split(/\s+/);
+          const last_name = parts.length > 1 ? parts[parts.length - 1] : "";
+          const first_name = parts.length > 1 ? parts.slice(0, -1).join(" ") : parts[0];
+          const { data: inserted, error } = await sb.from("staff").insert({
+            tenant_id: tenantId,
+            branch_id: branchId,
+            first_name,
+            last_name,
+            employment_type: "permanent",
+            active: false,
+          }).select("id").single();
+          if (error) {
+            console.error(`   ✗ auto-create staff "${name}": ${error.message}`);
+          } else {
+            staffByName.set(norm, inserted.id);
+            console.log(`   + auto-created staff "${name}" (inactive)`);
+          }
+        }
+      }
+
       for (const row of (data.rows ?? [])) {
         if (!row.date || !row.hours_by_staff) continue;
         for (const [staffName, hours] of Object.entries(row.hours_by_staff)) {

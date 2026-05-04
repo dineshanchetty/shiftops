@@ -17,11 +17,22 @@ export interface ShiftTemplate {
   is_active: boolean;
 }
 
+/** Aggregated last-year hours for one date (the same date 364 days back). */
+export interface PrevYearDaySummary {
+  date: string;            // current-year date (the panel's date)
+  prevDate: string;        // 364 days back
+  totalHours: number;
+  prevYrTurnover: number | null;  // gross_turnover from same-DOW prev year
+  perStaff: { staff_id: string; first_name: string; last_name: string; hours: number }[];
+}
+
 interface CalendarGridProps {
   entries: EntryWithStaff[];
   staff: Staff[];
   positions?: Position[];
   shiftTemplates?: ShiftTemplate[];
+  /** Map keyed by current-year date string → prev-year summary for the same DOW. */
+  prevYearByDate?: Map<string, PrevYearDaySummary>;
   dateRange: { start: Date; end: Date };
   onDateClick: (date: string) => void;
   loading?: boolean;
@@ -133,6 +144,7 @@ interface DailyDetailPanelProps {
   allStaff: Staff[];
   positions: Position[];
   shiftTemplates: ShiftTemplate[];
+  prevYear?: PrevYearDaySummary;
   onEditShifts: () => void;
   onEntryUpdated?: () => void;
   openingTime?: string;
@@ -146,6 +158,7 @@ function DailyDetailPanel({
   entries,
   allStaff,
   positions,
+  prevYear,
   shiftTemplates,
   openingTime,
   closingTime,
@@ -464,6 +477,33 @@ function DailyDetailPanel({
                 No active staff for this branch.
               </div>
             )}
+
+            {/* ─── Ghost roster: last year same DOW ─── */}
+            {prevYear && (prevYear.totalHours > 0 || (prevYear.prevYrTurnover ?? 0) > 0) && (
+              <div className="mt-4 pt-3 border-t border-dashed border-gray-200">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                    Ghost: Last year same day ({prevYear.prevDate})
+                  </span>
+                  <span className="text-[10px] text-gray-400">
+                    {prevYear.totalHours > 0 && <>Hours: <span className="font-mono font-semibold text-gray-500">{Math.round(prevYear.totalHours)}h</span></>}
+                    {prevYear.totalHours > 0 && (prevYear.prevYrTurnover ?? 0) > 0 && " · "}
+                    {(prevYear.prevYrTurnover ?? 0) > 0 && <>Revenue: <span className="font-mono font-semibold text-gray-500">R{prevYear.prevYrTurnover!.toFixed(0)}</span></>}
+                  </span>
+                </div>
+                {prevYear.perStaff.length > 0 && (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-1 opacity-70">
+                    {prevYear.perStaff.filter((p) => p.hours > 0).map((p) => (
+                      <div key={p.staff_id} className="flex items-center gap-1.5 text-[11px] text-gray-500">
+                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-gray-300" />
+                        <span className="truncate">{p.first_name} {p.last_name?.[0] ?? ""}.</span>
+                        <span className="ml-auto font-mono text-gray-400">{p.hours}h</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -477,6 +517,7 @@ export function CalendarGrid({
   staff,
   positions = [],
   shiftTemplates = [],
+  prevYearByDate,
   dateRange,
   onDateClick,
   loading = false,
@@ -747,6 +788,7 @@ export function CalendarGrid({
           allStaff={staff}
           positions={positions}
           shiftTemplates={shiftTemplates}
+          prevYear={prevYearByDate?.get(selectedDate)}
           onEditShifts={handleEditShifts}
           onEntryUpdated={onEntryUpdated}
           openingTime={openingTime}

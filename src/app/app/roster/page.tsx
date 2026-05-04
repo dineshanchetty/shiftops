@@ -38,6 +38,15 @@ export default function RosterPage() {
   const [selectedBranchData, setSelectedBranchData] = useState<Branch | null>(null);
 
   // Shift templates for selected branch (for the dropdown on each staff row)
+  // Last-year same-DOW summary keyed by current-year date string (for ghost roster)
+  const [prevYearByDate, setPrevYearByDate] = useState<Map<string, {
+    date: string;
+    prevDate: string;
+    totalHours: number;
+    prevYrTurnover: number | null;
+    perStaff: { staff_id: string; first_name: string; last_name: string; hours: number }[];
+  }>>(new Map());
+
   const [shiftTemplates, setShiftTemplates] = useState<Array<{
     id: string; name: string; shift_start: string; shift_end: string; is_active: boolean;
   }>>([]);
@@ -198,6 +207,80 @@ export default function RosterPage() {
     loadEntries();
   }, [loadEntries]);
 
+  // Load last-year same-DOW data for ghost roster overlay
+  useEffect(() => {
+    if (!filters.branchId) {
+      setPrevYearByDate(new Map());
+      return;
+    }
+    (async () => {
+      // Compute prev-year date range = current month range shifted back 364 days
+      const shift = (d: string) => {
+        const x = new Date(d + "T00:00:00Z");
+        x.setUTCDate(x.getUTCDate() - 364);
+        return x.toISOString().split("T")[0];
+      };
+      const prevStart = shift(startDateStr);
+      const prevEnd = shift(endDateStr);
+
+      // Pull roster_entries (with staff names) + daily_cashups gross_turnover for that prev-year range
+      const [rosterRes, cashupRes] = await Promise.all([
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (supabase as any)
+          .from("roster_entries")
+          .select("date, staff_id, shift_hours, is_off, staff!inner(first_name, last_name)")
+          .eq("branch_id", filters.branchId)
+          .gte("date", prevStart)
+          .lte("date", prevEnd),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (supabase as any)
+          .from("daily_cashups")
+          .select("date, gross_turnover")
+          .eq("branch_id", filters.branchId)
+          .gte("date", prevStart)
+          .lte("date", prevEnd),
+      ]);
+
+      // Build map: prev-year date → { totalHours, perStaff[], turnover }
+      const byPrevDate = new Map<string, { totalHours: number; perStaff: { staff_id: string; first_name: string; last_name: string; hours: number }[] }>();
+      for (const r of (rosterRes.data ?? []) as Array<{ date: string; staff_id: string; shift_hours: number | null; is_off: boolean | null; staff: { first_name: string; last_name: string } | null }>) {
+        if (r.is_off || !r.shift_hours) continue;
+        const cur = byPrevDate.get(r.date) ?? { totalHours: 0, perStaff: [] };
+        cur.totalHours += r.shift_hours;
+        if (r.staff) {
+          cur.perStaff.push({ staff_id: r.staff_id, first_name: r.staff.first_name, last_name: r.staff.last_name, hours: r.shift_hours });
+        }
+        byPrevDate.set(r.date, cur);
+      }
+      const turnoverByPrevDate = new Map<string, number>();
+      for (const c of (cashupRes.data ?? []) as Array<{ date: string; gross_turnover: number | null }>) {
+        if (c.gross_turnover != null) turnoverByPrevDate.set(c.date, c.gross_turnover);
+      }
+
+      // Re-key by current-year date
+      const result = new Map<string, { date: string; prevDate: string; totalHours: number; prevYrTurnover: number | null; perStaff: { staff_id: string; first_name: string; last_name: string; hours: number }[] }>();
+      const cur = new Date(startDateStr + "T00:00:00Z");
+      const end = new Date(endDateStr + "T00:00:00Z");
+      while (cur <= end) {
+        const curStr = cur.toISOString().split("T")[0];
+        const prevStr = shift(curStr);
+        const prevData = byPrevDate.get(prevStr);
+        const prevTurnover = turnoverByPrevDate.get(prevStr) ?? null;
+        if (prevData || prevTurnover != null) {
+          result.set(curStr, {
+            date: curStr,
+            prevDate: prevStr,
+            totalHours: prevData?.totalHours ?? 0,
+            prevYrTurnover: prevTurnover,
+            perStaff: (prevData?.perStaff ?? []).sort((a, b) => b.hours - a.hours),
+          });
+        }
+        cur.setUTCDate(cur.getUTCDate() + 1);
+      }
+      setPrevYearByDate(result);
+    })();
+  }, [filters.branchId, startDateStr, endDateStr, supabase]);
+
   // Total scheduled hours
   const totalScheduledHours = useMemo(
     () =>
@@ -297,6 +380,7 @@ export default function RosterPage() {
         staff={staff}
         positions={positions}
         shiftTemplates={shiftTemplates}
+        prevYearByDate={prevYearByDate}
         dateRange={dateRange}
         onDateClick={(date) => setEditorDate(date)}
         loading={loading}

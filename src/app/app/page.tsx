@@ -61,6 +61,8 @@ interface PredictiveData {
   recommendedStaff: number | null;
   scheduledTomorrowStaff: number;
   last7DaysTurnover: { date: string; turnover: number }[];
+  /** Last year same-DOW within same week-of-year for each of the last 7 days. Index aligns with last7DaysTurnover. */
+  last7DaysPrevYear: { date: string; turnover: number }[];
   last28DaysTurnover: { date: string; gross_turnover: number | null }[];
   weekTrend: number | null; // % change vs prior week
   cashFlowAlertDates: string[];
@@ -71,6 +73,10 @@ interface DashboardData {
   todaysCashups: number;
   missingCashups: number;
   monthlyTurnover: number;
+  /** Same month last year — for YoY comparison badge */
+  prevYearMonthTurnover: number;
+  /** 12 months of (this year, last year) totals for the Year Comparison tab */
+  yearCompareMonths: { ym: string; thisYear: number; prevYear: number; budget: number }[];
   lastMonthTurnover: number;
   todaysRoster: RosterRow[];
   upcomingRoster: { date: string; entries: RosterRow[] }[];
@@ -79,7 +85,7 @@ interface DashboardData {
   predictive: PredictiveData;
 }
 
-type DashboardTab = 'overview' | 'roster' | 'forecast' | 'alerts';
+type DashboardTab = 'overview' | 'roster' | 'forecast' | 'comparison' | 'alerts';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -126,6 +132,30 @@ function getWeekRange(): { start: string; end: string } {
 function getNDaysAgo(n: number): string {
   const d = new Date();
   d.setDate(d.getDate() - n);
+  return d.toISOString().split('T')[0];
+}
+
+/** Same-DOW last year:  for date D, returns the date 364 days earlier (52 weeks → preserves DOW). */
+function sameDowLastYear(date: string): string {
+  const d = new Date(date + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() - 364);
+  return d.toISOString().split('T')[0];
+}
+
+/** Range for the same calendar month one year ago — used for YoY headline. */
+function getPrevYearMonthRange(): { start: string; end: string } {
+  const now = new Date();
+  const y = now.getFullYear() - 1;
+  const m = now.getMonth();
+  const start = new Date(y, m, 1).toISOString().split('T')[0];
+  const end = new Date(y, m + 1, 0).toISOString().split('T')[0];
+  return { start, end };
+}
+
+/** First-of-month for N months ago (returns YYYY-MM-DD of the 1st) */
+function firstOfMonth(monthsAgo: number): string {
+  const now = new Date();
+  const d = new Date(now.getFullYear(), now.getMonth() - monthsAgo, 1);
   return d.toISOString().split('T')[0];
 }
 
@@ -376,6 +406,9 @@ export default function DashboardPage() {
         const { start: monthStart, end: monthEnd } = getMonthRange();
         const { start: lastMonthStart, end: lastMonthEnd } = getLastMonthRange();
         const { start: weekStart, end: weekEnd } = getWeekRange();
+        const { start: prevYearMonthStart, end: prevYearMonthEnd } = getPrevYearMonthRange();
+        // Year comparison spans ~13 months back so we have current month + last 12 months YoY.
+        const yoyRangeStart = firstOfMonth(13);
 
         const tomorrow = getTomorrow();
         const days28Ago = getNDaysAgo(28);
@@ -397,6 +430,9 @@ export default function DashboardPage() {
           last7CashupsRes,
           priorWeekCashupsRes,
           thisWeekCashupsForAlertRes,
+          prevYearMonthRes,
+          prevYearLast7Res,
+          yoyRangeRes,
         ] = await Promise.all([
           supabase.from('branches').select('id, name').eq('tenant_id', tenantId),
 
@@ -497,6 +533,29 @@ export default function DashboardPage() {
             .eq('tenant_id', tenantId)
             .gte('date', weekStart)
             .lte('date', weekEnd),
+
+          // Same calendar month last year — for YoY headline badge
+          supabase
+            .from('daily_cashups')
+            .select('gross_turnover')
+            .eq('tenant_id', tenantId)
+            .gte('date', prevYearMonthStart)
+            .lte('date', prevYearMonthEnd),
+
+          // Same-DOW last year for the last 7 calendar days (date - 364)
+          supabase
+            .from('daily_cashups')
+            .select('date, gross_turnover')
+            .eq('tenant_id', tenantId)
+            .gte('date', sameDowLastYear(getNDaysAgo(7)))
+            .lte('date', sameDowLastYear(today)),
+
+          // 13 months range for Year Comparison tab (this-year monthly totals + budget)
+          supabase
+            .from('daily_cashups')
+            .select('date, gross_turnover, budget_gross, budget_nett')
+            .eq('tenant_id', tenantId)
+            .gte('date', yoyRangeStart),
         ]);
 
         // ─── Process data ────────────────────────────────────────────────────
@@ -512,6 +571,34 @@ export default function DashboardPage() {
         const lastMonthTurnover = (lastMonthCashupsRes.data ?? []).reduce(
           (sum, c) => sum + (c.gross_turnover ?? 0), 0
         );
+        const prevYearMonthTurnover = (prevYearMonthRes.data ?? []).reduce(
+          (sum, c) => sum + (c.gross_turnover ?? 0), 0
+        );
+
+        // Build month-by-month YoY comparison for the new tab.
+        // Cast via unknown because budget_gross isn't in the auto-generated types yet (added in migration 013).
+        const yoyRows = ((yoyRangeRes.data ?? []) as unknown) as { date: string; gross_turnover: number | null; budget_gross: number | null }[];
+        const yoyByYm = new Map<string, { thisYear: number; budget: number }>();
+        for (const r of yoyRows) {
+          const ym = r.date.slice(0, 7);
+          const cur = yoyByYm.get(ym) ?? { thisYear: 0, budget: 0 };
+          cur.thisYear += r.gross_turnover ?? 0;
+          cur.budget += r.budget_gross ?? 0;
+          yoyByYm.set(ym, cur);
+        }
+        // Build the array for the last 13 months ending this month (current first → 12 months back)
+        const yearCompareMonths: { ym: string; thisYear: number; prevYear: number; budget: number }[] = [];
+        const now = new Date();
+        for (let i = 0; i < 13; i++) {
+          const dCur = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          const ym = `${dCur.getFullYear()}-${String(dCur.getMonth() + 1).padStart(2, "0")}`;
+          const ymPrev = `${dCur.getFullYear() - 1}-${String(dCur.getMonth() + 1).padStart(2, "0")}`;
+          const cur = yoyByYm.get(ym) ?? { thisYear: 0, budget: 0 };
+          const prev = yoyByYm.get(ymPrev)?.thisYear ?? 0;
+          yearCompareMonths.push({ ym, thisYear: cur.thisYear, prevYear: prev, budget: cur.budget });
+        }
+        // Reverse so oldest first reads naturally in the table
+        yearCompareMonths.reverse();
 
         const todaysRoster: RosterRow[] = (rosterRes.data ?? []).map(
           (entry: Record<string, unknown>) => {
@@ -625,6 +712,11 @@ export default function DashboardPage() {
 
         // Show Mon-Sun of the current week (always 7 days)
         const last7DaysTurnover: { date: string; turnover: number }[] = [];
+        const last7DaysPrevYear: { date: string; turnover: number }[] = [];
+        const prevYearLast7Map = new Map<string, number>();
+        for (const c of (prevYearLast7Res.data ?? []) as { date: string; gross_turnover: number | null }[]) {
+          if (c.gross_turnover != null) prevYearLast7Map.set(c.date, c.gross_turnover);
+        }
         const nowDate = new Date();
         const currentDow = nowDate.getDay(); // 0=Sun, 1=Mon...
         const mondayOffset = currentDow === 0 ? -6 : 1 - currentDow;
@@ -633,6 +725,8 @@ export default function DashboardPage() {
           d.setDate(d.getDate() + mondayOffset + i);
           const ds = d.toISOString().split('T')[0];
           last7DaysTurnover.push({ date: ds, turnover: last7Map.get(ds) ?? 0 });
+          const dsPrev = sameDowLastYear(ds);
+          last7DaysPrevYear.push({ date: dsPrev, turnover: prevYearLast7Map.get(dsPrev) ?? 0 });
         }
 
         const thisWeekTotal = last7Raw.reduce((sum, c) => sum + (c.gross_turnover ?? 0), 0);
@@ -670,6 +764,7 @@ export default function DashboardPage() {
           recommendedStaff,
           scheduledTomorrowStaff,
           last7DaysTurnover,
+          last7DaysPrevYear,
           last28DaysTurnover: last28,
           weekTrend,
           cashFlowAlertDates,
@@ -680,6 +775,8 @@ export default function DashboardPage() {
           todaysCashups,
           missingCashups,
           monthlyTurnover,
+          prevYearMonthTurnover,
+          yearCompareMonths,
           lastMonthTurnover,
           todaysRoster,
           upcomingRoster,
@@ -769,6 +866,7 @@ export default function DashboardPage() {
     { id: 'overview', label: 'Overview', icon: <LayoutDashboard size={15} /> },
     { id: 'roster', label: 'Roster', icon: <Calendar size={15} /> },
     { id: 'forecast', label: 'Forecast', icon: <Sparkles size={15} /> },
+    { id: 'comparison', label: 'YoY', icon: <TrendingUp size={15} /> },
     { id: 'alerts', label: 'Alerts', icon: <AlertTriangle size={15} />, badge: alertCount > 0 ? alertCount : undefined },
   ];
 
@@ -798,9 +896,18 @@ export default function DashboardPage() {
         <StatCard
           label="Monthly Turnover"
           value={formatCurrency(data.monthlyTurnover)}
-          delta={delta}
+          delta={
+            data.prevYearMonthTurnover > 0
+              ? Math.round(((data.monthlyTurnover - data.prevYearMonthTurnover) / data.prevYearMonthTurnover) * 100)
+              : delta
+          }
           icon={<TrendingUp size={20} />}
           className="bg-gradient-to-br from-orange-50 to-amber-50 border border-orange-100"
+          footer={
+            data.prevYearMonthTurnover > 0
+              ? <span>vs Prev Yr {formatCurrency(data.prevYearMonthTurnover)}</span>
+              : undefined
+          }
         />
       </div>
 
@@ -883,20 +990,36 @@ export default function DashboardPage() {
                     </div>
 
                     <div className="flex items-end gap-3 h-[220px] px-2">
-                      {vals.map((item) => {
+                      {vals.map((item, idx) => {
                         const { date, turnover } = item;
                         const isForecast = 'isForecast' in item && (item as { isForecast?: boolean }).isForecast;
                         const isToday = date === today;
-                        const heightPct = maxVal > 0 && turnover > 0 ? Math.max(8, (turnover / maxVal) * 100) : 0;
+                        const prevYr = data.predictive.last7DaysPrevYear?.[idx]?.turnover ?? 0;
+                        // Use the larger of {this-year, prev-year} so both fit
+                        const localMax = Math.max(maxVal, prevYr);
+                        const heightPct = localMax > 0 && turnover > 0 ? Math.max(8, (turnover / localMax) * 100) : 0;
+                        const ghostHeightPct = localMax > 0 && prevYr > 0 ? Math.max(4, (prevYr / localMax) * 100) : 0;
                         return (
                           <div key={date} className="flex-1 flex flex-col items-center gap-1.5 group">
                             <span className="text-[10px] font-mono text-gray-500 truncate w-full text-center opacity-0 group-hover:opacity-100 transition-opacity">
                               {turnover > 0 ? formatCurrency(turnover) : '—'}
+                              {prevYr > 0 && (
+                                <span className="ml-1 text-gray-300">/ PY {formatCurrency(prevYr)}</span>
+                              )}
                             </span>
-                            <div className="w-full relative flex items-end" style={{ height: '180px' }}>
+                            <div className="w-full relative flex items-end gap-0.5" style={{ height: '180px' }}>
+                              {/* Ghost bar (prev-year same-DOW) — slim, faded */}
+                              {ghostHeightPct > 0 && (
+                                <div
+                                  className="w-2 rounded-t bg-gray-300/60 border border-gray-300 self-end"
+                                  style={{ height: `${ghostHeightPct}%` }}
+                                  title={`Prev Yr: ${formatCurrency(prevYr)}`}
+                                />
+                              )}
+                              {/* Main bar */}
                               {turnover > 0 ? (
                                 <div
-                                  className={`w-full rounded-t-lg transition-all duration-300 ${
+                                  className={`flex-1 rounded-t-lg transition-all duration-300 ${
                                     isToday
                                       ? 'bg-gradient-to-t from-orange-600 to-orange-400 shadow-lg shadow-orange-200'
                                       : isForecast
@@ -906,7 +1029,7 @@ export default function DashboardPage() {
                                   style={{ height: `${heightPct}%` }}
                                 />
                               ) : (
-                                <div className="w-full h-1 rounded bg-gray-200" />
+                                <div className="flex-1 h-1 rounded bg-gray-200 self-end" />
                               )}
                             </div>
                             <div className="text-center">
@@ -924,6 +1047,10 @@ export default function DashboardPage() {
                           </div>
                         );
                       })}
+                    </div>
+                    <div className="mt-2 flex items-center gap-3 text-[10px] text-gray-400">
+                      <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 rounded-sm bg-blue-500" /> This year</span>
+                      <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm bg-gray-300/80 border border-gray-300" /> Prev year same DOW</span>
                     </div>
                   </div>
                 );
@@ -1427,6 +1554,80 @@ export default function DashboardPage() {
               </p>
             </>
           )}
+        </div>
+      )}
+
+      {/* ════════════════════ TAB: YEAR COMPARISON ════════════════════ */}
+      {dashboardTab === 'comparison' && (
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <TrendingUp size={18} className="text-accent" />
+                Year-over-Year Comparison
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-base-200 text-left text-xs uppercase tracking-wider text-base-400">
+                      <th className="py-2 pr-4">Month</th>
+                      <th className="py-2 pr-4 text-right">This Year</th>
+                      <th className="py-2 pr-4 text-right">Prev Year</th>
+                      <th className="py-2 pr-4 text-right">Δ</th>
+                      <th className="py-2 pr-4 text-right">YoY %</th>
+                      <th className="py-2 pr-4 text-right">Budget</th>
+                      <th className="py-2 text-right">vs Budget %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.yearCompareMonths.map((row) => {
+                      const yoyPct = row.prevYear > 0 ? Math.round(((row.thisYear - row.prevYear) / row.prevYear) * 100) : null;
+                      const budgetPct = row.budget > 0 ? Math.round(((row.thisYear - row.budget) / row.budget) * 100) : null;
+                      const ymLabel = new Date(row.ym + "-01T00:00:00").toLocaleDateString("en-ZA", { month: "short", year: "numeric" });
+                      return (
+                        <tr key={row.ym} className="border-b border-base-100 hover:bg-base-50">
+                          <td className="py-2 pr-4 font-medium text-base-900">{ymLabel}</td>
+                          <td className="py-2 pr-4 text-right font-mono">{row.thisYear > 0 ? formatCurrency(row.thisYear) : '—'}</td>
+                          <td className="py-2 pr-4 text-right font-mono text-base-500">{row.prevYear > 0 ? formatCurrency(row.prevYear) : '—'}</td>
+                          <td className={`py-2 pr-4 text-right font-mono ${row.thisYear - row.prevYear >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {row.prevYear > 0 ? formatCurrency(row.thisYear - row.prevYear) : '—'}
+                          </td>
+                          <td className={`py-2 pr-4 text-right font-semibold ${(yoyPct ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {yoyPct != null ? `${yoyPct >= 0 ? '+' : ''}${yoyPct}%` : '—'}
+                          </td>
+                          <td className="py-2 pr-4 text-right font-mono text-base-500">{row.budget > 0 ? formatCurrency(row.budget) : '—'}</td>
+                          <td className={`py-2 text-right font-semibold ${(budgetPct ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {budgetPct != null ? `${budgetPct >= 0 ? '+' : ''}${budgetPct}%` : '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-base-300 font-bold">
+                      <td className="py-2 pr-4">Totals</td>
+                      <td className="py-2 pr-4 text-right font-mono">
+                        {formatCurrency(data.yearCompareMonths.reduce((s, r) => s + r.thisYear, 0))}
+                      </td>
+                      <td className="py-2 pr-4 text-right font-mono text-base-500">
+                        {formatCurrency(data.yearCompareMonths.reduce((s, r) => s + r.prevYear, 0))}
+                      </td>
+                      <td colSpan={2} />
+                      <td className="py-2 pr-4 text-right font-mono text-base-500">
+                        {formatCurrency(data.yearCompareMonths.reduce((s, r) => s + r.budget, 0))}
+                      </td>
+                      <td />
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+              <p className="text-xs text-base-400 mt-4">
+                Data sourced from imported franchisor monthly reports. Months without data show as &mdash;.
+              </p>
+            </CardContent>
+          </Card>
         </div>
       )}
 
