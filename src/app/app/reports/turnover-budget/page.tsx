@@ -166,26 +166,50 @@ export default function TurnoverBudgetPage() {
   }, []);
 
   // ── Helper: fetch prev year turnover for a month ──
+  // Returns a map keyed by day-of-month → sum of prev_yr_to across branches.
+  // Uses the imported `prev_yr_to` column (franchisor's per-date prev-year value),
+  // falling back to summing actual gross_turnover from the same date one year back
+  // when prev_yr_to is null.
   const fetchPrevYearTurnover = useCallback(
     async (branchIds: string[], year: number, month: number) => {
-      const prevYear = year - 1;
-      const fromDate = `${prevYear}-${String(month + 1).padStart(2, "0")}-01`;
-      const lastDay = new Date(prevYear, month + 1, 0).getDate();
-      const toDate = `${prevYear}-${String(month + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+      // Current month range — read prev_yr_to directly from rows for this period.
+      const fromDate = `${year}-${String(month + 1).padStart(2, "0")}-01`;
+      const lastDay = new Date(year, month + 1, 0).getDate();
+      const toDate = `${year}-${String(month + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
 
-      const { data: cashups } = await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: cashups } = await (supabase as any)
         .from("daily_cashups")
-        .select("date, gross_turnover")
+        .select("date, prev_yr_to")
         .in("branch_id", branchIds)
         .gte("date", fromDate)
         .lte("date", toDate);
 
       const map = new Map<number, number>();
-      if (cashups) {
-        for (const c of cashups) {
-          const day = new Date(c.date + "T00:00:00").getDate();
-          map.set(day, (map.get(day) ?? 0) + (c.gross_turnover ?? 0));
+      const haveDates = new Set<number>();
+      for (const c of (cashups ?? []) as { date: string; prev_yr_to: number | null }[]) {
+        const day = new Date(c.date + "T00:00:00").getDate();
+        if (c.prev_yr_to != null) {
+          map.set(day, (map.get(day) ?? 0) + c.prev_yr_to);
+          haveDates.add(day);
         }
+      }
+
+      // For days with no franchisor prev_yr_to value, fall back to actual gross_turnover one year back.
+      const prevYear = year - 1;
+      const prevFrom = `${prevYear}-${String(month + 1).padStart(2, "0")}-01`;
+      const prevLast = new Date(prevYear, month + 1, 0).getDate();
+      const prevTo = `${prevYear}-${String(month + 1).padStart(2, "0")}-${String(prevLast).padStart(2, "0")}`;
+      const { data: prevCashups } = await supabase
+        .from("daily_cashups")
+        .select("date, gross_turnover")
+        .in("branch_id", branchIds)
+        .gte("date", prevFrom)
+        .lte("date", prevTo);
+      for (const c of prevCashups ?? []) {
+        const day = new Date(c.date + "T00:00:00").getDate();
+        if (haveDates.has(day)) continue; // franchisor value already present
+        map.set(day, (map.get(day) ?? 0) + (c.gross_turnover ?? 0));
       }
       return map;
     },
@@ -422,13 +446,19 @@ export default function TurnoverBudgetPage() {
 
       const cashups = cashupsResult.data;
 
-      // Build actual turnover map
+      // Build actual turnover map + per-date imported budget (sum across branches)
       const actualByDate = new Map<string, number>();
+      const importedBudgetByDate = new Map<string, number>();
       let totalWages = 0;
       if (cashups) {
         for (const c of cashups as DailyCashup[]) {
           const existing = actualByDate.get(c.date) ?? 0;
           actualByDate.set(c.date, existing + (c.gross_turnover ?? 0));
+          // Pull imported budget_nett if present (added by historic import migration 013)
+          const cb = (c as unknown as { budget_nett?: number | null }).budget_nett;
+          if (cb != null) {
+            importedBudgetByDate.set(c.date, (importedBudgetByDate.get(c.date) ?? 0) + cb);
+          }
           totalWages += (c as Record<string, unknown>).total_wages
             ? Number((c as Record<string, unknown>).total_wages)
             : 0;
@@ -455,9 +485,14 @@ export default function TurnoverBudgetPage() {
         const actualNett = actualByDate.get(iso) ?? 0;
         const prevYr = prevYrMap.get(dayOfMonth) ?? 0;
 
-        // Budget: prefer saved daily budget, fall back to flat daily amount
+        // Budget priority: 1) manually saved daily budget, 2) imported franchisor budget, 3) flat fallback
         const saved = savedBudgetsMap.get(iso);
-        const budgetNett = saved ? saved.budget : dailyBudgetFallback;
+        const importedBudget = importedBudgetByDate.get(iso);
+        const budgetNett = saved
+          ? saved.budget
+          : (importedBudget != null && importedBudget > 0)
+            ? importedBudget
+            : dailyBudgetFallback;
         const budgetGross = budgetNett * 1.15;
         const diff = actualNett - budgetNett;
 
