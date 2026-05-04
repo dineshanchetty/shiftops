@@ -703,6 +703,8 @@ async function applyMode() {
       budget_gross: r.budget_gross,
       prev_yr_to: r.prev_yr_to,
       growth_pct: r.growth_pct,
+      // Backfill cash_banked = gross_turnover for historic so banking variance reads as 0.
+      cash_banked: r.gross_turnover,
       data_source: "historic_import",
       status: "submitted",
     }));

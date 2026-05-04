@@ -95,7 +95,7 @@ export default function BudgetRosterPage() {
         supabase.from("positions").select("id, name"),
         supabase
           .from("daily_cashups")
-          .select("gross_turnover")
+          .select("gross_turnover, prev_yr_to, budget_nett")
           .in("branch_id", f.branchIds)
           .gte("date", f.dateFrom)
           .lte("date", f.dateTo),
@@ -189,13 +189,24 @@ export default function BudgetRosterPage() {
 
       setDateRows(rows);
 
-      // Compute summary
+      // Compute summary — pull prev_yr_to and imported budget_nett from daily_cashups
       const actualTO = (cashups ?? []).reduce(
         (s, c) => s + (c.gross_turnover ?? 0),
         0
       );
+      const prevYearTO = (cashups ?? []).reduce(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (s, c) => s + (((c as any).prev_yr_to as number | null) ?? 0),
+        0,
+      );
+      const importedBudgetTO = (cashups ?? []).reduce(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (s, c) => s + (((c as any).budget_nett as number | null) ?? 0),
+        0,
+      );
       const totalDays = rows.length;
-      const budgetTO = totalDays * 15000; // default budget
+      // Prefer the franchisor's imported daily budget; fall back to flat R15k/day if none.
+      const budgetTO = importedBudgetTO > 0 ? importedBudgetTO : totalDays * 15000;
       const totalRosteredHours = rows.reduce((s, r) => s + r.totalHours, 0);
       const avgHourlyRate = 45; // default rate
       const actualWages = totalRosteredHours * avgHourlyRate;
@@ -204,7 +215,7 @@ export default function BudgetRosterPage() {
       setSummaryStats({
         actualWageTotal: actualWages,
         budgetWageTotal: budgetWages,
-        prevYearNettTO: 0,
+        prevYearNettTO: prevYearTO,
         actualNettTO: actualTO,
         budgetNettTO: budgetTO,
       });

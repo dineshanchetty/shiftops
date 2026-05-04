@@ -90,7 +90,8 @@ export default function MonthlyCCPage() {
         const ccCashUp = dayData?.creditCardsCashUp ?? 0;
         const ccBatch = dayData?.ccBatchTotal ?? 0;
         const varianceAdmin = ccCashUp - ccBatch;
-        const ccBanked = 0; // TODO: separate banking field
+        // Credit card settlements bank automatically — use batch total as banked proxy.
+        const ccBanked = ccBatch;
         const varianceBanked = ccCashUp - ccBanked;
 
         rows.push({

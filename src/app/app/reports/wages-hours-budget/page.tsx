@@ -111,7 +111,7 @@ export default function WagesHoursBudgetPage() {
         supabase.from("positions").select("id, name"),
         supabase
           .from("daily_cashups")
-          .select("gross_turnover")
+          .select("gross_turnover, prev_yr_to")
           .in("branch_id", f.branchIds)
           .gte("date", f.dateFrom)
           .lte("date", f.dateTo),
@@ -203,6 +203,11 @@ export default function WagesHoursBudgetPage() {
       setData(rows);
 
       // Summary
+      const prevYearTO = (cashups ?? []).reduce(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (s, c) => s + (((c as any).prev_yr_to as number | null) ?? 0),
+        0,
+      );
       const actualTO = (cashups ?? []).reduce(
         (s, c) => s + (c.gross_turnover ?? 0),
         0
@@ -215,7 +220,7 @@ export default function WagesHoursBudgetPage() {
       setSummaryStats({
         actualWageTotal: totalActualWages,
         budgetWageTotal: totalBudgetWages,
-        prevYearNettTO: 0,
+        prevYearNettTO: prevYearTO,
         actualNettTO: actualTO,
         budgetNettTO: budgetTO,
       });

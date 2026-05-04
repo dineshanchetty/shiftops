@@ -512,6 +512,11 @@ export type Database = {
           tx_collect: number | null
           tx_count: number | null
           tx_delivery: number | null
+          budget_nett: number | null
+          budget_gross: number | null
+          prev_yr_to: number | null
+          growth_pct: number | null
+          data_source: string | null
         }
         Insert: {
           aura_import_id?: string | null
@@ -537,6 +542,11 @@ export type Database = {
           tx_collect?: number | null
           tx_count?: number | null
           tx_delivery?: number | null
+          budget_nett?: number | null
+          budget_gross?: number | null
+          prev_yr_to?: number | null
+          growth_pct?: number | null
+          data_source?: string | null
         }
         Update: {
           aura_import_id?: string | null
@@ -562,6 +572,11 @@ export type Database = {
           tx_collect?: number | null
           tx_count?: number | null
           tx_delivery?: number | null
+          budget_nett?: number | null
+          budget_gross?: number | null
+          prev_yr_to?: number | null
+          growth_pct?: number | null
+          data_source?: string | null
         }
         Relationships: [
           {
