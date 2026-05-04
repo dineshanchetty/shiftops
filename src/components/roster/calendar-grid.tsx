@@ -421,6 +421,33 @@ function DailyDetailPanel({
         </div>
       </div>
 
+      {/* ─── Ghost roster: last year same DOW (top, compact) ─── */}
+      {prevYear && (prevYear.totalHours > 0 || (prevYear.prevYrTurnover ?? 0) > 0) && (
+        <div className="mx-4 sm:mx-6 mt-3 rounded-lg border border-dashed border-gray-300 bg-gray-50/60 px-3 py-2">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-gray-500">
+              👻 Last year same day ({prevYear.prevDate})
+            </span>
+            <span className="text-[11px] text-gray-500">
+              {prevYear.totalHours > 0 && <>Hours: <span className="font-mono font-semibold text-gray-700">{Math.round(prevYear.totalHours)}h</span></>}
+              {prevYear.totalHours > 0 && (prevYear.prevYrTurnover ?? 0) > 0 && " · "}
+              {(prevYear.prevYrTurnover ?? 0) > 0 && <>Revenue: <span className="font-mono font-semibold text-gray-700">R{prevYear.prevYrTurnover!.toFixed(0)}</span></>}
+            </span>
+          </div>
+          {prevYear.perStaff.length > 0 && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-3 gap-y-0.5">
+              {prevYear.perStaff.filter((p) => p.hours > 0).map((p) => (
+                <div key={p.staff_id} className="flex items-center gap-1.5 text-[11px] text-gray-600">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-gray-400" />
+                  <span className="truncate">{p.first_name} {p.last_name?.[0] ?? ""}.</span>
+                  <span className="ml-auto font-mono text-gray-500">{p.hours}h</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* No templates warning */}
       {noTemplates && (
         <div className="mx-4 sm:mx-6 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
@@ -475,33 +502,6 @@ function DailyDetailPanel({
             {activeStaff.length === 0 && (
               <div className="py-8 text-center text-sm text-base-400">
                 No active staff for this branch.
-              </div>
-            )}
-
-            {/* ─── Ghost roster: last year same DOW ─── */}
-            {prevYear && (prevYear.totalHours > 0 || (prevYear.prevYrTurnover ?? 0) > 0) && (
-              <div className="mt-4 pt-3 border-t border-dashed border-gray-200">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-                    Ghost: Last year same day ({prevYear.prevDate})
-                  </span>
-                  <span className="text-[10px] text-gray-400">
-                    {prevYear.totalHours > 0 && <>Hours: <span className="font-mono font-semibold text-gray-500">{Math.round(prevYear.totalHours)}h</span></>}
-                    {prevYear.totalHours > 0 && (prevYear.prevYrTurnover ?? 0) > 0 && " · "}
-                    {(prevYear.prevYrTurnover ?? 0) > 0 && <>Revenue: <span className="font-mono font-semibold text-gray-500">R{prevYear.prevYrTurnover!.toFixed(0)}</span></>}
-                  </span>
-                </div>
-                {prevYear.perStaff.length > 0 && (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-1 opacity-70">
-                    {prevYear.perStaff.filter((p) => p.hours > 0).map((p) => (
-                      <div key={p.staff_id} className="flex items-center gap-1.5 text-[11px] text-gray-500">
-                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-gray-300" />
-                        <span className="truncate">{p.first_name} {p.last_name?.[0] ?? ""}.</span>
-                        <span className="ml-auto font-mono text-gray-400">{p.hours}h</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
               </div>
             )}
           </div>
