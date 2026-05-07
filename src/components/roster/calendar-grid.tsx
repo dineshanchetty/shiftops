@@ -112,9 +112,10 @@ interface DaySummary {
 
 function computeDaySummary(dayEntries: EntryWithStaff[]): DaySummary {
   const workingEntries = dayEntries.filter((e) => !e.is_off);
-  const staffCount = workingEntries.length;
+  // Count unique staff so split shifts for one person don't double-count.
+  const staffCount = new Set(workingEntries.map((e) => e.staff_id)).size;
   const totalHours = workingEntries.reduce((sum, e) => sum + (e.shift_hours ?? 0), 0);
-  const allFilled = staffCount > 0 && workingEntries.every((e) => e.shift_start && e.shift_end);
+  const allFilled = workingEntries.length > 0 && workingEntries.every((e) => e.shift_start && e.shift_end);
   return { staffCount, totalHours, allFilled, hasEntries: dayEntries.length > 0 };
 }
 
@@ -183,10 +184,22 @@ function DailyDetailPanel({
     [shiftTemplates]
   );
 
-  // Build entry-by-staff map for O(1) lookup
-  const entryByStaff = useMemo(() => {
-    const m = new Map<string, EntryWithStaff>();
-    for (const e of localEntries) m.set(e.staff_id, e);
+  // Build entries-by-staff map (multiple entries per staff = split shifts).
+  const entriesByStaff = useMemo(() => {
+    const m = new Map<string, EntryWithStaff[]>();
+    for (const e of localEntries) {
+      const arr = m.get(e.staff_id) ?? [];
+      arr.push(e);
+      m.set(e.staff_id, arr);
+    }
+    // Sort each staff's entries by shift_start (off rows last).
+    m.forEach((arr) => {
+      arr.sort((a, b) => {
+        if (a.is_off && !b.is_off) return 1;
+        if (!a.is_off && b.is_off) return -1;
+        return (a.shift_start ?? "").localeCompare(b.shift_start ?? "");
+      });
+    });
     return m;
   }, [localEntries]);
 
@@ -218,23 +231,39 @@ function DailyDetailPanel({
   }
 
   // ─── Apply selection ──────────────────────────────────────────────────────
-  // value codes: ""=not scheduled, "off"=leave/off, "<templateId>"=working that template
+  // value codes: ""=not scheduled (delete this row), "off"=leave/off,
+  //              "<templateId>"=working that template
+  // entryId: existing row to update/delete; null means create a new row
+  //          (used by the "Add another shift" trailing dropdown).
 
-  async function handleSelect(staffId: string, value: string) {
+  async function handleSelect(staffId: string, entryId: string | null, value: string) {
     if (!branchId || !tenantId) return;
     setSavingStaffId(staffId);
 
-    const existing = entryByStaff.get(staffId);
+    const existing = entryId ? localEntries.find((e) => e.id === entryId) : null;
+    const otherEntries = localEntries.filter(
+      (e) => e.staff_id === staffId && e.id !== entryId
+    );
 
     try {
       if (value === "") {
-        // Not scheduled: delete row if it exists
+        // Not scheduled: delete this specific row if it exists
         if (existing) {
           await supabase.from("roster_entries").delete().eq("id", existing.id);
           setLocalEntries((prev) => prev.filter((e) => e.id !== existing.id));
         }
       } else if (value === "off") {
-        // OFF / Leave: upsert with is_off=true
+        // OFF / Leave is mutually exclusive — clear any other shift rows for this staff/day.
+        if (otherEntries.length > 0) {
+          await supabase
+            .from("roster_entries")
+            .delete()
+            .in(
+              "id",
+              otherEntries.map((e) => e.id)
+            );
+        }
+
         const payload = {
           staff_id: staffId,
           branch_id: branchId,
@@ -247,18 +276,33 @@ function DailyDetailPanel({
         };
         if (existing) {
           await supabase.from("roster_entries").update(payload).eq("id", existing.id);
-          setLocalEntries((prev) => prev.map((e) => e.id === existing.id ? { ...e, ...payload } as EntryWithStaff : e));
+          setLocalEntries((prev) =>
+            prev
+              .filter((e) => !otherEntries.some((o) => o.id === e.id))
+              .map((e) => (e.id === existing.id ? ({ ...e, ...payload } as EntryWithStaff) : e))
+          );
         } else {
           const { data } = await supabase.from("roster_entries").insert(payload).select("*").single();
           if (data) {
             const staffRec = allStaff.find((s) => s.id === staffId);
             if (staffRec) {
-              setLocalEntries((prev) => [...prev, { ...(data as RosterEntry), staff: { first_name: staffRec.first_name, last_name: staffRec.last_name, position_id: staffRec.position_id, sub_position_id: staffRec.sub_position_id ?? null } } as EntryWithStaff]);
+              setLocalEntries((prev) => [
+                ...prev.filter((e) => !otherEntries.some((o) => o.id === e.id)),
+                {
+                  ...(data as RosterEntry),
+                  staff: {
+                    first_name: staffRec.first_name,
+                    last_name: staffRec.last_name,
+                    position_id: staffRec.position_id,
+                    sub_position_id: staffRec.sub_position_id ?? null,
+                  },
+                } as EntryWithStaff,
+              ]);
             }
           }
         }
       } else {
-        // Template: upsert with template times
+        // Template: insert new row OR update this row to the picked template
         const tmpl = activeTemplates.find((t) => t.id === value);
         if (!tmpl) return;
         const start = tmpl.shift_start.slice(0, 5);
@@ -266,6 +310,21 @@ function DailyDetailPanel({
         const [sh, sm] = start.split(":").map(Number);
         const [eh, em] = end.split(":").map(Number);
         const hours = Math.max(0, (eh * 60 + em - sh * 60 - sm) / 60);
+
+        // If there's an existing OFF row for this staff and we're adding a working shift
+        // via the trailing "+ shift" dropdown, drop the OFF row first (working ≠ off).
+        const offRowsToClear = entryId
+          ? []
+          : otherEntries.filter((e) => e.is_off);
+        if (offRowsToClear.length > 0) {
+          await supabase
+            .from("roster_entries")
+            .delete()
+            .in(
+              "id",
+              offRowsToClear.map((e) => e.id)
+            );
+        }
 
         const payload = {
           staff_id: staffId,
@@ -279,13 +338,26 @@ function DailyDetailPanel({
         };
         if (existing) {
           await supabase.from("roster_entries").update(payload).eq("id", existing.id);
-          setLocalEntries((prev) => prev.map((e) => e.id === existing.id ? { ...e, ...payload } as EntryWithStaff : e));
+          setLocalEntries((prev) =>
+            prev.map((e) => (e.id === existing.id ? ({ ...e, ...payload } as EntryWithStaff) : e))
+          );
         } else {
           const { data } = await supabase.from("roster_entries").insert(payload).select("*").single();
           if (data) {
             const staffRec = allStaff.find((s) => s.id === staffId);
             if (staffRec) {
-              setLocalEntries((prev) => [...prev, { ...(data as RosterEntry), staff: { first_name: staffRec.first_name, last_name: staffRec.last_name, position_id: staffRec.position_id, sub_position_id: staffRec.sub_position_id ?? null } } as EntryWithStaff]);
+              setLocalEntries((prev) => [
+                ...prev.filter((e) => !offRowsToClear.some((o) => o.id === e.id)),
+                {
+                  ...(data as RosterEntry),
+                  staff: {
+                    first_name: staffRec.first_name,
+                    last_name: staffRec.last_name,
+                    position_id: staffRec.position_id,
+                    sub_position_id: staffRec.sub_position_id ?? null,
+                  },
+                } as EntryWithStaff,
+              ]);
             }
           }
         }
@@ -299,9 +371,14 @@ function DailyDetailPanel({
   // Format template label e.g. "Morning · 06:00–14:00"
   const tmplLabel = (t: ShiftTemplate) => `${t.name} · ${t.shift_start.slice(0, 5)}–${t.shift_end.slice(0, 5)}`;
 
-  // Render a single staff row with dropdown + Gantt visualization
-  function renderRow(s: Staff) {
-    const entry = entryByStaff.get(s.id);
+  // Render one shift row (existing entry, or a trailing blank row for adding a split shift).
+  // entry === null means this is the trailing "+ add another shift" row.
+  function renderShiftRow(
+    s: Staff,
+    entry: EntryWithStaff | null,
+    rowKey: string,
+    isFirst: boolean
+  ) {
     const posName = getPositionName(s.position_id, positions);
     const colors = posName ? GANTT_BAR_COLORS[posName] ?? DEFAULT_BAR_COLOR : DEFAULT_BAR_COLOR;
     const isSaving = savingStaffId === s.id;
@@ -309,20 +386,19 @@ function DailyDetailPanel({
     let value = "";
     if (entry?.is_off) value = "off";
     else if (entry?.shift_start && entry?.shift_end) {
-      // Match a template by start+end
       const matched = activeTemplates.find((t) =>
         t.shift_start.slice(0, 5) === entry.shift_start!.slice(0, 5) &&
         t.shift_end.slice(0, 5) === entry.shift_end!.slice(0, 5)
       );
       if (matched) value = matched.id;
-      else value = "custom"; // pre-existing custom shift
+      else value = "custom";
     }
 
-    // Compute bar position
+    // Bar geometry
     let barLeft = 0;
     let barWidth = 0;
     let hasBar = false;
-    if (!entry?.is_off && entry?.shift_start && entry?.shift_end) {
+    if (entry && !entry.is_off && entry.shift_start && entry.shift_end) {
       const sMin = parseTimeToMinutes(entry.shift_start);
       const eMin = parseTimeToMinutes(entry.shift_end);
       barLeft = Math.max(0, ((sMin - rangeStartMin) / totalRangeMin) * 100);
@@ -330,44 +406,58 @@ function DailyDetailPanel({
       hasBar = barWidth > 0;
     }
 
+    const isTrailing = entry === null;
+
     return (
-      <div key={s.id} className="flex items-center gap-2 py-1">
+      <div key={rowKey} className="flex items-center gap-2 py-1">
         <div className="w-[160px] sm:w-[200px] shrink-0 pr-2">
-          <div className="flex items-center gap-1.5">
-            <span className="inline-block h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: colors.bg }} />
-            <span className="text-xs font-medium text-base-700 truncate">
-              {s.first_name} {s.last_name?.[0] ?? ""}.
-            </span>
-          </div>
+          {isFirst ? (
+            <div className="flex items-center gap-1.5">
+              <span className="inline-block h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: colors.bg }} />
+              <span className="text-xs font-medium text-base-700 truncate">
+                {s.first_name} {s.last_name?.[0] ?? ""}.
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 pl-3.5 text-gray-400">
+              <span className="text-[11px]">↳</span>
+              <span className="text-[10px] uppercase tracking-wide">
+                {isTrailing ? "add shift" : "split shift"}
+              </span>
+            </div>
+          )}
         </div>
 
-        {/* Dropdown */}
         <div className="w-[180px] shrink-0">
           <select
             value={value === "custom" ? "" : value}
-            onChange={(e) => handleSelect(s.id, e.target.value)}
+            onChange={(e) => handleSelect(s.id, entry?.id ?? null, e.target.value)}
             disabled={isSaving}
             className={cn(
               "w-full text-xs rounded-md border bg-white px-2 py-1 outline-none transition-colors",
-              entry?.is_off ? "border-amber-300 bg-amber-50 text-amber-700" :
-              hasBar ? "border-base-200 text-base-700" :
-              "border-gray-200 text-gray-400"
+              entry?.is_off
+                ? "border-amber-300 bg-amber-50 text-amber-700"
+                : hasBar
+                ? "border-base-200 text-base-700"
+                : isTrailing
+                ? "border-dashed border-gray-300 text-gray-400"
+                : "border-gray-200 text-gray-400"
             )}
           >
-            <option value="">— Not scheduled —</option>
+            <option value="">{isTrailing ? "+ Add another shift" : "— Not scheduled —"}</option>
             {activeTemplates.map((t) => (
               <option key={t.id} value={t.id}>{tmplLabel(t)}</option>
             ))}
-            <option value="off">Leave / OFF</option>
-            {value === "custom" && (
+            {/* Only the first row can flip to OFF (mutually exclusive). */}
+            {isFirst && !isTrailing && <option value="off">Leave / OFF</option>}
+            {value === "custom" && entry && (
               <option value="custom" disabled>
-                Custom: {entry!.shift_start!.slice(0,5)}–{entry!.shift_end!.slice(0,5)}
+                Custom: {entry.shift_start!.slice(0, 5)}–{entry.shift_end!.slice(0, 5)}
               </option>
             )}
           </select>
         </div>
 
-        {/* Gantt visualization (read-only) */}
         <div className="flex-1 relative h-[28px]">
           {hours.map((h) => {
             const pct = ((h * 60 - rangeStartMin) / totalRangeMin) * 100;
@@ -379,15 +469,15 @@ function DailyDetailPanel({
           {currentTimePercent !== null && (
             <div className="absolute top-0 bottom-0 w-px border-l border-dashed border-red-500 z-10" style={{ left: `${currentTimePercent}%` }} />
           )}
-          {hasBar && (
+          {hasBar && entry && (
             <div
               className="absolute top-[3px] h-[22px] rounded-md shadow-sm flex items-center px-2 select-none"
               style={{ left: `${barLeft}%`, width: `${barWidth}%`, backgroundColor: colors.bg }}
-              title={`${entry!.shift_start!.slice(0,5)}–${entry!.shift_end!.slice(0,5)}`}
+              title={`${entry.shift_start!.slice(0, 5)}–${entry.shift_end!.slice(0, 5)}`}
             >
               {barWidth > 8 && (
                 <span className="text-[10px] font-medium leading-none truncate" style={{ color: colors.text }}>
-                  {entry!.shift_start!.slice(0,5)}–{entry!.shift_end!.slice(0,5)}
+                  {entry.shift_start!.slice(0, 5)}–{entry.shift_end!.slice(0, 5)}
                 </span>
               )}
             </div>
@@ -402,9 +492,38 @@ function DailyDetailPanel({
     );
   }
 
-  // Stats
-  const workingCount = localEntries.filter((e) => !e.is_off && e.shift_start).length;
-  const offCount = localEntries.filter((e) => e.is_off).length;
+  // Render all rows for one staff member: existing entries + (if not OFF) trailing "add shift".
+  function renderRow(s: Staff) {
+    const staffEntries = entriesByStaff.get(s.id) ?? [];
+    const hasOff = staffEntries.some((e) => e.is_off);
+
+    if (staffEntries.length === 0) {
+      // No entries yet: a single empty dropdown row.
+      return (
+        <div key={s.id}>
+          {renderShiftRow(s, null, `${s.id}-new`, true)}
+        </div>
+      );
+    }
+
+    return (
+      <div key={s.id}>
+        {staffEntries.map((e, idx) =>
+          renderShiftRow(s, e, e.id, idx === 0)
+        )}
+        {/* Trailing "+ add another shift" — hidden when staff is OFF. */}
+        {!hasOff && renderShiftRow(s, null, `${s.id}-add`, false)}
+      </div>
+    );
+  }
+
+  // Stats — dedupe by staff_id so split shifts don't double-count.
+  const workingCount = new Set(
+    localEntries.filter((e) => !e.is_off && e.shift_start).map((e) => e.staff_id)
+  ).size;
+  const offCount = new Set(
+    localEntries.filter((e) => e.is_off).map((e) => e.staff_id)
+  ).size;
   const totalHours = localEntries.reduce((s, e) => s + (e.shift_hours ?? 0), 0);
 
   const noTemplates = activeTemplates.length === 0;

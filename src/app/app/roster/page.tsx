@@ -242,13 +242,24 @@ export default function RosterPage() {
       ]);
 
       // Build map: prev-year date → { totalHours, perStaff[], turnover }
-      const byPrevDate = new Map<string, { totalHours: number; perStaff: { staff_id: string; first_name: string; last_name: string; hours: number }[] }>();
+      // Aggregate split shifts by staff_id so a person doesn't appear twice in the ghost row.
+      const byPrevDate = new Map<string, { totalHours: number; perStaffMap: Map<string, { staff_id: string; first_name: string; last_name: string; hours: number }> }>();
       for (const r of (rosterRes.data ?? []) as Array<{ date: string; staff_id: string; shift_hours: number | null; is_off: boolean | null; staff: { first_name: string; last_name: string } | null }>) {
         if (r.is_off || !r.shift_hours) continue;
-        const cur = byPrevDate.get(r.date) ?? { totalHours: 0, perStaff: [] };
+        const cur = byPrevDate.get(r.date) ?? { totalHours: 0, perStaffMap: new Map() };
         cur.totalHours += r.shift_hours;
         if (r.staff) {
-          cur.perStaff.push({ staff_id: r.staff_id, first_name: r.staff.first_name, last_name: r.staff.last_name, hours: r.shift_hours });
+          const existing = cur.perStaffMap.get(r.staff_id);
+          if (existing) {
+            existing.hours += r.shift_hours;
+          } else {
+            cur.perStaffMap.set(r.staff_id, {
+              staff_id: r.staff_id,
+              first_name: r.staff.first_name,
+              last_name: r.staff.last_name,
+              hours: r.shift_hours,
+            });
+          }
         }
         byPrevDate.set(r.date, cur);
       }
@@ -272,7 +283,7 @@ export default function RosterPage() {
             prevDate: prevStr,
             totalHours: prevData?.totalHours ?? 0,
             prevYrTurnover: prevTurnover,
-            perStaff: (prevData?.perStaff ?? []).sort((a, b) => b.hours - a.hours),
+            perStaff: (prevData ? Array.from(prevData.perStaffMap.values()) : []).sort((a, b) => b.hours - a.hours),
           });
         }
         cur.setUTCDate(cur.getUTCDate() + 1);
