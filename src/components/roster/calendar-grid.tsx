@@ -171,9 +171,13 @@ function DailyDetailPanel({
   const [localEntries, setLocalEntries] = useState<EntryWithStaff[]>(entries);
   const [savingStaffId, setSavingStaffId] = useState<string | null>(null);
 
+  // Reset local state only when the user opens a *different* day. Within the same day
+  // the panel is authoritative: a background parent refetch (e.g. triggered by our own
+  // save) must not clobber optimistic adds that haven't shown up in the refetch yet.
   useEffect(() => {
     setLocalEntries(entries);
-  }, [entries]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateStr]);
 
   // Identify managers
   const managerPosId = positions?.find((p) => p.name.toLowerCase() === "manager")?.id;
@@ -701,7 +705,11 @@ export function CalendarGrid({
   const effectiveBranchId = branchId ?? entries[0]?.branch_id;
   const effectiveTenantId = tenantId ?? entries[0]?.tenant_id;
 
-  if (loading) {
+  // Only show the loading skeleton on the *initial* load (no entries yet).
+  // Background refetches (e.g. after the panel saves a shift) must NOT replace the
+  // grid with a skeleton, or the open DailyDetailPanel unmounts and the user's
+  // optimistic state is lost — making split-shift adds appear to silently fail.
+  if (loading && entries.length === 0) {
     return (
       <div className="rounded-xl border border-base-200 overflow-hidden overflow-x-auto">
         <div className="grid bg-base-800" style={{ gridTemplateColumns: "repeat(7, minmax(80px, 1fr))" }}>
