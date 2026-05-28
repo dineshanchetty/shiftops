@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/lib/auth-context';
 import {
   LayoutDashboard,
   Calendar,
@@ -23,7 +24,16 @@ interface SidebarProps {
   tenantLogoUrl?: string | null;
 }
 
-const navGroups = [
+type NavItem = {
+  label: string;
+  href: string;
+  icon: typeof LayoutDashboard;
+  /** If true, only shown to owners (Admin). */
+  ownerOnly?: boolean;
+};
+type NavGroup = { label: string; items: NavItem[]; ownerOnly?: boolean };
+
+const navGroups: NavGroup[] = [
   {
     label: 'Operations',
     items: [
@@ -48,8 +58,9 @@ const navGroups = [
   },
   {
     label: 'System',
+    ownerOnly: true,
     items: [
-      { label: 'Settings', href: '/app/settings', icon: Settings },
+      { label: 'Settings', href: '/app/settings', icon: Settings, ownerOnly: true },
     ],
   },
 ];
@@ -71,6 +82,16 @@ export function Sidebar({
   tenantLogoUrl,
 }: SidebarProps) {
   const router = useRouter();
+  const { role } = useAuth();
+  const isOwner = role === 'owner';
+
+  const visibleGroups = navGroups
+    .filter((g) => !g.ownerOnly || isOwner)
+    .map((g) => ({
+      ...g,
+      items: g.items.filter((i) => !i.ownerOnly || isOwner),
+    }))
+    .filter((g) => g.items.length > 0);
 
   const handleLogout = async () => {
     // POST to logout API route, then redirect
@@ -97,7 +118,7 @@ export function Sidebar({
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto py-4 space-y-6">
-        {navGroups.map((group) => (
+        {visibleGroups.map((group) => (
           <div key={group.label}>
             <p className="px-5 mb-1 text-[11px] font-medium uppercase tracking-wider text-gray-500">
               {group.label}

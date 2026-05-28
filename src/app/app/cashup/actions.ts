@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { requireOwner, getCurrentRole } from "@/lib/permissions";
 import type {
   DailyCashup,
   CashupOnlinePayment,
@@ -322,6 +323,23 @@ export async function saveCashup(input: SaveCashupInput) {
   let cashupId = input.id;
 
   if (cashupId) {
+    // Block managers from saving over a posted cashup. Owners can.
+    const { data: existing } = await supabase
+      .from("daily_cashups")
+      .select("status")
+      .eq("id", cashupId)
+      .single();
+    if (existing?.status === "submitted") {
+      const role = await getCurrentRole();
+      if (role !== "owner") {
+        return {
+          success: false,
+          error:
+            "This cashup is locked. Ask an Admin to unlock it before making changes.",
+        };
+      }
+    }
+
     // Update existing
     const { error } = await supabase
       .from("daily_cashups")
@@ -538,6 +556,10 @@ export async function unlockCashup(cashupId: string) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { success: false, error: "Unauthorized" };
+
+  // Only Admin (owner) can re-open a posted cashup.
+  const guard = await requireOwner();
+  if (!guard.ok) return { success: false, error: guard.error };
 
   const { error } = await supabase
     .from("daily_cashups")
