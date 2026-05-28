@@ -1,0 +1,286 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
+import { requireOwner } from "@/lib/permissions";
+
+export type TeamRole = "owner" | "manager";
+
+export interface TeamMember {
+  id: string;
+  user_id: string;
+  email: string;
+  role: TeamRole;
+  branch_ids: string[];
+  is_self: boolean;
+  created_at: string | null;
+  last_sign_in_at: string | null;
+  pending_invite: boolean;
+}
+
+/**
+ * List all members of the caller's tenant. Owner-only.
+ *
+ * Joins tenant_members → auth.users via the service-role client to surface
+ * email + last-sign-in-at, which RLS hides from the regular client.
+ */
+export async function listTeamMembers(): Promise<
+  { ok: true; members: TeamMember[] } | { ok: false; error: string }
+> {
+  const guard = await requireOwner();
+  if (!guard.ok) return guard;
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Unauthorized" };
+
+  const { data: tenantId } = await supabase.rpc("get_user_tenant_id");
+  if (!tenantId) return { ok: false, error: "No tenant found" };
+
+  const { data: members, error } = await supabase
+    .from("tenant_members")
+    .select("id, user_id, role, branch_ids, created_at")
+    .eq("tenant_id", tenantId)
+    .order("created_at", { ascending: true });
+
+  if (error) return { ok: false, error: error.message };
+
+  // Look up email + last_sign_in via service-role admin API.
+  const service = createServiceClient();
+  const byUserId = new Map<string, { email: string; last_sign_in_at: string | null; confirmed_at: string | null }>();
+
+  // listUsers is paginated; loop until empty.
+  let page = 1;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { data, error: listErr } = await service.auth.admin.listUsers({
+      page,
+      perPage: 200,
+    });
+    if (listErr) return { ok: false, error: listErr.message };
+    if (!data.users || data.users.length === 0) break;
+    for (const u of data.users) {
+      byUserId.set(u.id, {
+        email: u.email ?? "(no email)",
+        last_sign_in_at: u.last_sign_in_at ?? null,
+        confirmed_at: u.email_confirmed_at ?? u.confirmed_at ?? null,
+      });
+    }
+    if (data.users.length < 200) break;
+    page += 1;
+  }
+
+  const result: TeamMember[] = (members ?? []).map((m) => {
+    const u = byUserId.get(m.user_id);
+    return {
+      id: m.id,
+      user_id: m.user_id,
+      email: u?.email ?? "(unknown)",
+      role: m.role as TeamRole,
+      branch_ids: m.branch_ids ?? [],
+      is_self: m.user_id === user.id,
+      created_at: m.created_at,
+      last_sign_in_at: u?.last_sign_in_at ?? null,
+      pending_invite: !u?.confirmed_at && !u?.last_sign_in_at,
+    };
+  });
+
+  return { ok: true, members: result };
+}
+
+/**
+ * Invite a new user by email and add them to the tenant with the chosen role.
+ * Owner-only.
+ *
+ * - If the email is already an auth user: just attaches them as a tenant member.
+ * - If not: sends an invite email (Supabase auth.admin.inviteUserByEmail) and
+ *   pre-creates the tenant_members row so they land in this tenant on signup.
+ */
+export async function inviteTeamMember(
+  email: string,
+  role: TeamRole
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const guard = await requireOwner();
+  if (!guard.ok) return guard;
+
+  const trimmed = email.trim().toLowerCase();
+  if (!trimmed || !trimmed.includes("@")) {
+    return { ok: false, error: "Enter a valid email address." };
+  }
+  if (role !== "owner" && role !== "manager") {
+    return { ok: false, error: "Invalid role." };
+  }
+
+  const supabase = await createClient();
+  const { data: tenantId } = await supabase.rpc("get_user_tenant_id");
+  if (!tenantId) return { ok: false, error: "No tenant found" };
+
+  const service = createServiceClient();
+
+  // Does this email already have an auth user?
+  let targetUserId: string | null = null;
+  let page = 1;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { data, error: listErr } = await service.auth.admin.listUsers({
+      page,
+      perPage: 200,
+    });
+    if (listErr) return { ok: false, error: listErr.message };
+    if (!data.users || data.users.length === 0) break;
+    const match = data.users.find((u) => u.email?.toLowerCase() === trimmed);
+    if (match) {
+      targetUserId = match.id;
+      break;
+    }
+    if (data.users.length < 200) break;
+    page += 1;
+  }
+
+  if (!targetUserId) {
+    // Send invite — Supabase emails them a magic link to set a password.
+    const { data: inviteData, error: inviteErr } =
+      await service.auth.admin.inviteUserByEmail(trimmed);
+    if (inviteErr || !inviteData?.user) {
+      return {
+        ok: false,
+        error: inviteErr?.message ?? "Failed to send invite email.",
+      };
+    }
+    targetUserId = inviteData.user.id;
+  }
+
+  // Check for an existing membership first to avoid noisy unique-constraint errors.
+  const { data: existing } = await service
+    .from("tenant_members")
+    .select("id, tenant_id, role")
+    .eq("user_id", targetUserId)
+    .maybeSingle();
+
+  if (existing) {
+    if (existing.tenant_id !== tenantId) {
+      return {
+        ok: false,
+        error: "This user already belongs to another tenant.",
+      };
+    }
+    // Already on this tenant — update role idempotently.
+    const { error: updErr } = await service
+      .from("tenant_members")
+      .update({ role })
+      .eq("id", existing.id);
+    if (updErr) return { ok: false, error: updErr.message };
+  } else {
+    const { error: insErr } = await service
+      .from("tenant_members")
+      .insert({ tenant_id: tenantId, user_id: targetUserId, role });
+    if (insErr) return { ok: false, error: insErr.message };
+  }
+
+  revalidatePath("/app/settings/team");
+  return { ok: true };
+}
+
+export async function updateTeamMemberRole(
+  memberId: string,
+  role: TeamRole
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const guard = await requireOwner();
+  if (!guard.ok) return guard;
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Unauthorized" };
+
+  const { data: tenantId } = await supabase.rpc("get_user_tenant_id");
+  if (!tenantId) return { ok: false, error: "No tenant found" };
+
+  // Fetch the target member
+  const { data: target, error: tErr } = await supabase
+    .from("tenant_members")
+    .select("id, user_id, role")
+    .eq("id", memberId)
+    .eq("tenant_id", tenantId)
+    .single();
+  if (tErr || !target) return { ok: false, error: "Member not found" };
+
+  // Don't let an owner demote themselves if they're the last owner.
+  if (target.user_id === user.id && target.role === "owner" && role !== "owner") {
+    const { count } = await supabase
+      .from("tenant_members")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenantId)
+      .eq("role", "owner");
+    if ((count ?? 0) <= 1) {
+      return {
+        ok: false,
+        error: "You're the last Admin — promote someone else first.",
+      };
+    }
+  }
+
+  const { error } = await supabase
+    .from("tenant_members")
+    .update({ role })
+    .eq("id", memberId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/app/settings/team");
+  return { ok: true };
+}
+
+export async function removeTeamMember(
+  memberId: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const guard = await requireOwner();
+  if (!guard.ok) return guard;
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Unauthorized" };
+
+  const { data: tenantId } = await supabase.rpc("get_user_tenant_id");
+  if (!tenantId) return { ok: false, error: "No tenant found" };
+
+  const { data: target } = await supabase
+    .from("tenant_members")
+    .select("id, user_id, role")
+    .eq("id", memberId)
+    .eq("tenant_id", tenantId)
+    .single();
+  if (!target) return { ok: false, error: "Member not found" };
+
+  if (target.user_id === user.id) {
+    return { ok: false, error: "You can't remove yourself." };
+  }
+
+  if (target.role === "owner") {
+    const { count } = await supabase
+      .from("tenant_members")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenantId)
+      .eq("role", "owner");
+    if ((count ?? 0) <= 1) {
+      return {
+        ok: false,
+        error: "Can't remove the last Admin.",
+      };
+    }
+  }
+
+  const { error } = await supabase
+    .from("tenant_members")
+    .delete()
+    .eq("id", memberId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/app/settings/team");
+  return { ok: true };
+}

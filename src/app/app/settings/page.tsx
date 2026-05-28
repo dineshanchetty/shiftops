@@ -9,7 +9,7 @@ import {
   CardDescription,
   CardContent,
 } from "@/components/ui/card";
-import { GitBranch, Link2, UserCog, CreditCard, ArrowRight, Tag } from "lucide-react";
+import { GitBranch, Link2, UserCog, CreditCard, ArrowRight, Tag, Users } from "lucide-react";
 
 const settingsCards = [
   {
@@ -37,6 +37,13 @@ const settingsCards = [
       "View your subscription, usage, and manage your billing plan.",
     href: "/app/settings/billing",
     icon: CreditCard,
+  },
+  {
+    title: "Team",
+    description:
+      "Invite people, change Admin / Manager roles, and remove users.",
+    href: "/app/settings/team",
+    icon: Users,
   },
   {
     title: "Account Settings",
