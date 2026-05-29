@@ -45,9 +45,11 @@ const SA_PUBLIC_HOLIDAYS_2026 = new Set([
   "2026-12-26", // Day of Goodwill
 ]);
 
-const DEFAULT_HOURLY_RATE = 35; // R35/hr default
-const SUNDAY_MULTIPLIER = 2;
-const PH_MULTIPLIER = 2;
+// Default fallback when no per-staff rate is set in Rate History.
+// Confirmed by Naveshan 2026-05-28: current Reitz rate is R30.81/hr.
+const DEFAULT_HOURLY_RATE = 30.81;
+const SUNDAY_MULTIPLIER = 1.5; // time-and-a-half
+const PH_MULTIPLIER = 2;       // double time
 
 /** Classify a date string as 'normal', 'sunday', or 'public_holiday' */
 function classifyDay(dateStr: string): "normal" | "sunday" | "public_holiday" {
@@ -257,6 +259,125 @@ export default function PayrollExportPage() {
     [supabase]
   );
 
+  const handleExportPDF = useCallback(async () => {
+    if (data.length === 0) return;
+    // Lazy-load jsPDF — keeps it out of the main bundle.
+    const { jsPDF } = await import("jspdf");
+    const autoTable = (await import("jspdf-autotable")).default;
+
+    const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+
+    const period =
+      filters && `${filters.dateFrom} → ${filters.dateTo}`;
+
+    // Header
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.text("Sage Pastel Payroll Export", 40, 38);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(110);
+    if (period) doc.text(`Period: ${period}`, 40, 54);
+    doc.text(
+      `Generated: ${new Date().toLocaleString("en-ZA")}`,
+      40,
+      66
+    );
+    doc.text(
+      `Default rate: R${DEFAULT_HOURLY_RATE.toFixed(2)}/hr · Sunday ${SUNDAY_MULTIPLIER}× · PH ${PH_MULTIPLIER}× · OT 1.5×`,
+      40,
+      78
+    );
+    doc.setTextColor(0);
+
+    autoTable(doc, {
+      startY: 92,
+      head: [[
+        "Emp Code",
+        "Surname",
+        "First Name",
+        "ID Number",
+        "Position",
+        "Total Hrs",
+        "Normal",
+        "Sunday",
+        "PH",
+        "Overtime",
+        "Gross Wages",
+      ]],
+      body: data.map((r) => [
+        r.emp_code,
+        r.surname,
+        r.first_name,
+        r.id_number || "—",
+        r.position || "—",
+        r.total_hours.toFixed(1),
+        r.normal_hours.toFixed(1),
+        r.sunday_hours.toFixed(1),
+        r.public_holiday_hours.toFixed(1),
+        r.overtime_hours.toFixed(1),
+        formatCurrency(r.total_wages),
+      ]),
+      foot: [[
+        `Totals (${data.length} staff)`,
+        "", "", "", "",
+        data.reduce((s, r) => s + r.total_hours, 0).toFixed(1),
+        data.reduce((s, r) => s + r.normal_hours, 0).toFixed(1),
+        data.reduce((s, r) => s + r.sunday_hours, 0).toFixed(1),
+        data.reduce((s, r) => s + r.public_holiday_hours, 0).toFixed(1),
+        data.reduce((s, r) => s + r.overtime_hours, 0).toFixed(1),
+        formatCurrency(data.reduce((s, r) => s + r.total_wages, 0)),
+      ]],
+      styles: {
+        font: "helvetica",
+        fontSize: 8,
+        cellPadding: 4,
+        overflow: "linebreak",
+      },
+      headStyles: {
+        fillColor: [55, 65, 81],
+        textColor: 255,
+        fontStyle: "bold",
+      },
+      footStyles: {
+        fillColor: [243, 244, 246],
+        textColor: 0,
+        fontStyle: "bold",
+      },
+      alternateRowStyles: { fillColor: [249, 250, 251] },
+      columnStyles: {
+        0: { cellWidth: 50 },                                   // Emp Code
+        3: { cellWidth: 80 },                                   // ID
+        4: { cellWidth: 60 },                                   // Position
+        5: { halign: "right" }, 6: { halign: "right" },
+        7: { halign: "right" }, 8: { halign: "right" },
+        9: { halign: "right" }, 10: { halign: "right", cellWidth: 70 },
+      },
+      didDrawPage: (d) => {
+        const page = doc.getNumberOfPages();
+        doc.setFontSize(8);
+        doc.setTextColor(150);
+        doc.text(
+          `Page ${page}`,
+          d.settings.margin.left,
+          doc.internal.pageSize.height - 20
+        );
+        doc.text(
+          "ShiftOps",
+          doc.internal.pageSize.width - d.settings.margin.right,
+          doc.internal.pageSize.height - 20,
+          { align: "right" }
+        );
+      },
+      margin: { left: 30, right: 30, top: 30, bottom: 30 },
+    });
+
+    const filename = filters
+      ? `payroll-export-${filters.dateFrom}-to-${filters.dateTo}.pdf`
+      : "payroll-export.pdf";
+    doc.save(filename);
+  }, [data, filters]);
+
   const handleExportCSV = useCallback(() => {
     // Sage Pastel compatible format
     const headers = [
@@ -342,6 +463,7 @@ export default function PayrollExportPage() {
       title="Sage Pastel Payroll Export"
       onRun={handleRun}
       onExportCSV={handleExportCSV}
+      onExportPDF={handleExportPDF}
     >
       {/* Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
