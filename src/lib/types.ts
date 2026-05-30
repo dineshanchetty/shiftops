@@ -644,6 +644,7 @@ export type Database = {
           shift_start: string | null
           staff_id: string
           tenant_id: string
+          leave_type: string | null
         }
         Insert: {
           branch_id: string
@@ -657,6 +658,7 @@ export type Database = {
           shift_start?: string | null
           staff_id: string
           tenant_id: string
+          leave_type?: string | null
         }
         Update: {
           branch_id?: string
@@ -670,6 +672,7 @@ export type Database = {
           shift_start?: string | null
           staff_id?: string
           tenant_id?: string
+          leave_type?: string | null
         }
         Relationships: [
           {
@@ -816,6 +819,27 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      staff_branches: {
+        Row: {
+          staff_id: string
+          branch_id: string
+          tenant_id: string
+          created_at: string
+        }
+        Insert: {
+          staff_id: string
+          branch_id: string
+          tenant_id: string
+          created_at?: string
+        }
+        Update: {
+          staff_id?: string
+          branch_id?: string
+          tenant_id?: string
+          created_at?: string
+        }
+        Relationships: []
       }
       tenant_members: {
         Row: {

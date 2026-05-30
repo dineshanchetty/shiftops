@@ -22,6 +22,7 @@ interface PayrollRow {
   normal_hours: number;
   sunday_hours: number;
   public_holiday_hours: number;
+  leave_hours: number;
   overtime_hours: number;
   total_wages: number;
   earnings_code: string;
@@ -71,7 +72,10 @@ export default function PayrollExportPage() {
       setLoading(true);
       setFilters(f);
 
-      // Fetch roster entries for the period
+      // Fetch roster entries for the period.
+      // Include is_off=true rows so we can pick up paid_leave (which sets is_off
+      // true but has shift_hours that count toward payroll). Unpaid 'off' rows
+      // are filtered out below.
       const { data: rosterEntries } = await supabase
         .from("roster_entries")
         .select(
@@ -79,8 +83,7 @@ export default function PayrollExportPage() {
         )
         .in("branch_id", f.branchIds)
         .gte("date", f.dateFrom)
-        .lte("date", f.dateTo)
-        .eq("is_off", false);
+        .lte("date", f.dateTo);
 
       // Fetch driver wage entries for the period
       const { data: cashups } = await supabase
@@ -137,6 +140,8 @@ export default function PayrollExportPage() {
           staff_id: string;
           date: string;
           shift_hours: number | null;
+          is_off: boolean | null;
+          leave_type: string | null;
           staff: {
             id: string;
             first_name: string;
@@ -150,12 +155,22 @@ export default function PayrollExportPage() {
         })[]) {
           if (!re.staff) continue;
 
-          // Check if this is a leave/absent day
+          // Skip unpaid days entirely — they earn nothing.
+          // (Paid leave is is_off=true but leave_type='paid_leave', and DOES count.)
+          if (re.is_off && re.leave_type !== "paid_leave" && re.leave_type !== "sick") {
+            continue;
+          }
+
+          // Paid leave / sick from the roster trumps attendance-status detection.
+          const isPaidLeaveRow =
+            re.leave_type === "paid_leave" || re.leave_type === "sick";
+
           const attendanceArr = re.attendance;
           const isLeave =
-            attendanceArr &&
-            attendanceArr.length > 0 &&
-            attendanceArr.some((a) => a.status === "absent" || a.status === "leave");
+            isPaidLeaveRow ||
+            (attendanceArr &&
+              attendanceArr.length > 0 &&
+              attendanceArr.some((a) => a.status === "absent" || a.status === "leave"));
 
           // Prefer attendance actual_hours if confirmed, else roster shift_hours
           const confirmedAttendance =
@@ -165,7 +180,9 @@ export default function PayrollExportPage() {
           const hours = confirmedAttendance?.actual_hours ?? re.shift_hours ?? 0;
 
           const dayType = classifyDay(re.date);
-          const overtime = Math.max(0, hours - 9);
+          // Leave days don't accrue overtime, even if the default leave hours
+          // happen to be > 9.
+          const overtime = isLeave ? 0 : Math.max(0, hours - 9);
           const regularHours = hours - overtime;
 
           const existing = byStaff.get(re.staff_id);
@@ -242,6 +259,7 @@ export default function PayrollExportPage() {
             normal_hours: Math.round(s.normal_hours * 100) / 100,
             sunday_hours: Math.round(s.sunday_hours * 100) / 100,
             public_holiday_hours: Math.round(s.ph_hours * 100) / 100,
+            leave_hours: Math.round(s.leave_hours * 100) / 100,
             overtime_hours: Math.round(s.overtime_hours * 100) / 100,
             total_wages: Math.round(totalWages * 100) / 100,
             earnings_code: "1000",
@@ -302,6 +320,7 @@ export default function PayrollExportPage() {
         "Normal",
         "Sunday",
         "PH",
+        "Leave",
         "Overtime",
         "Gross Wages",
       ]],
@@ -315,6 +334,7 @@ export default function PayrollExportPage() {
         r.normal_hours.toFixed(1),
         r.sunday_hours.toFixed(1),
         r.public_holiday_hours.toFixed(1),
+        r.leave_hours.toFixed(1),
         r.overtime_hours.toFixed(1),
         formatCurrency(r.total_wages),
       ]),
@@ -325,6 +345,7 @@ export default function PayrollExportPage() {
         data.reduce((s, r) => s + r.normal_hours, 0).toFixed(1),
         data.reduce((s, r) => s + r.sunday_hours, 0).toFixed(1),
         data.reduce((s, r) => s + r.public_holiday_hours, 0).toFixed(1),
+        data.reduce((s, r) => s + r.leave_hours, 0).toFixed(1),
         data.reduce((s, r) => s + r.overtime_hours, 0).toFixed(1),
         formatCurrency(data.reduce((s, r) => s + r.total_wages, 0)),
       ]],
@@ -351,7 +372,8 @@ export default function PayrollExportPage() {
         4: { cellWidth: 60 },                                   // Position
         5: { halign: "right" }, 6: { halign: "right" },
         7: { halign: "right" }, 8: { halign: "right" },
-        9: { halign: "right" }, 10: { halign: "right", cellWidth: 70 },
+        9: { halign: "right" }, 10: { halign: "right" },
+        11: { halign: "right", cellWidth: 70 },
       },
       didDrawPage: (d) => {
         const page = doc.getNumberOfPages();
@@ -430,6 +452,19 @@ export default function PayrollExportPage() {
           "Public Holiday",
           r.public_holiday_hours,
           Math.round(r.public_holiday_hours * DEFAULT_HOURLY_RATE * PH_MULTIPLIER * 100) / 100,
+        ]);
+      }
+      // 1003 = Paid Leave (paid at normal rate)
+      if (r.leave_hours > 0) {
+        rows.push([
+          r.emp_code,
+          r.surname,
+          r.first_name,
+          r.id_number,
+          "1003",
+          "Paid Leave",
+          r.leave_hours,
+          Math.round(r.leave_hours * DEFAULT_HOURLY_RATE * 100) / 100,
         ]);
       }
       // 3000 = Overtime hours
@@ -529,6 +564,7 @@ export default function PayrollExportPage() {
                     "Normal",
                     "Sunday",
                     "PH",
+                    "Leave",
                     "Overtime",
                     "Gross Wages",
                     "Earnings Code",
@@ -588,6 +624,9 @@ export default function PayrollExportPage() {
                     <td className="px-4 py-2 text-right font-mono text-base-900">
                       {row.public_holiday_hours.toFixed(1)}
                     </td>
+                    <td className="px-4 py-2 text-right font-mono text-blue-700">
+                      {row.leave_hours.toFixed(1)}
+                    </td>
                     <td className="px-4 py-2 text-right font-mono text-base-900">
                       {row.overtime_hours.toFixed(1)}
                     </td>
@@ -621,6 +660,11 @@ export default function PayrollExportPage() {
                   <td className="px-4 py-2 text-right font-mono text-base-900">
                     {data
                       .reduce((s, r) => s + r.public_holiday_hours, 0)
+                      .toFixed(1)}
+                  </td>
+                  <td className="px-4 py-2 text-right font-mono text-blue-700">
+                    {data
+                      .reduce((s, r) => s + r.leave_hours, 0)
                       .toFixed(1)}
                   </td>
                   <td className="px-4 py-2 text-right font-mono text-base-900">

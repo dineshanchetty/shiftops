@@ -131,7 +131,8 @@ export default function RosterPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load staff for the selected branch
+  // Load staff for the selected branch — includes staff whose primary branch
+  // is this one AND staff who are linked via staff_branches (shared drivers).
   useEffect(() => {
     async function loadStaff() {
       if (!filters.branchId) {
@@ -139,13 +140,37 @@ export default function RosterPage() {
         return;
       }
 
-      const { data } = await supabase
+      // 1. Primary-branch staff
+      const primaryRes = await supabase
         .from("staff")
         .select("*")
         .eq("branch_id", filters.branchId)
-        .eq("active", true)
-        .order("first_name");
-      if (data) setStaff(data);
+        .eq("active", true);
+
+      // 2. Additional-branch staff (via staff_branches m2m)
+      const mappingsRes = await supabase
+        .from("staff_branches")
+        .select("staff_id")
+        .eq("branch_id", filters.branchId);
+
+      const extraIds = (mappingsRes.data ?? [])
+        .map((m) => m.staff_id as string)
+        .filter((id) => !(primaryRes.data ?? []).some((s) => s.id === id));
+
+      let extra: typeof primaryRes.data = [];
+      if (extraIds.length > 0) {
+        const r = await supabase
+          .from("staff")
+          .select("*")
+          .in("id", extraIds)
+          .eq("active", true);
+        extra = r.data ?? [];
+      }
+
+      const all = [...(primaryRes.data ?? []), ...(extra ?? [])].sort((a, b) =>
+        (a.first_name ?? "").localeCompare(b.first_name ?? "")
+      );
+      setStaff(all);
     }
 
     loadStaff();

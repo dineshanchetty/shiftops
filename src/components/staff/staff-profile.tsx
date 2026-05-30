@@ -47,6 +47,37 @@ export function StaffProfile({
   const [saving, setSaving] = useState(false);
   const [showDeactivate, setShowDeactivate] = useState(false);
 
+  // Additional branches this staff member works at (m2m via staff_branches).
+  // The primary branch (form.branch_id) is included implicitly and not shown
+  // here — toggling primary uses the dropdown above.
+  const [additionalBranchIds, setAdditionalBranchIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadStaffBranches() {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("staff_branches")
+        .select("branch_id")
+        .eq("staff_id", staff.id);
+      if (cancelled) return;
+      const ids = (data ?? [])
+        .map((r) => r.branch_id as string)
+        .filter((id) => id !== staff.branch_id);
+      setAdditionalBranchIds(ids);
+    }
+    loadStaffBranches();
+    return () => {
+      cancelled = true;
+    };
+  }, [staff.id, staff.branch_id]);
+
+  function toggleAdditionalBranch(branchId: string) {
+    setAdditionalBranchIds((prev) =>
+      prev.includes(branchId) ? prev.filter((id) => id !== branchId) : [...prev, branchId]
+    );
+  }
+
   // Filter sub-positions by selected position
   const filteredSubPositions = subPositions.filter(
     (sp) => sp.position_id === form.position_id
@@ -95,6 +126,23 @@ export function StaffProfile({
         .eq("id", staff.id);
 
       if (error) throw error;
+
+      // Sync staff_branches: always include the primary branch + chosen additional ones.
+      // Simplest approach: delete-all-then-insert. Idempotent and easy to reason about.
+      const desired = Array.from(
+        new Set([form.branch_id, ...additionalBranchIds].filter(Boolean))
+      );
+      await supabase.from("staff_branches").delete().eq("staff_id", staff.id);
+      if (desired.length > 0) {
+        await supabase.from("staff_branches").insert(
+          desired.map((bid) => ({
+            staff_id: staff.id,
+            branch_id: bid,
+            tenant_id: staff.tenant_id,
+          }))
+        );
+      }
+
       onSaved();
     } finally {
       setSaving(false);
@@ -239,7 +287,7 @@ export function StaffProfile({
 
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-base-700">
-                  Branch
+                  Primary Branch
                 </label>
                 <select
                   value={form.branch_id}
@@ -253,6 +301,38 @@ export function StaffProfile({
                   ))}
                 </select>
               </div>
+
+              {/* Additional branches — drivers in shared delivery pools (e.g. Deliveree)
+                  often work for multiple stores. The primary branch is implied; tick
+                  any others the person also works at. */}
+              {branches.length > 1 && (
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-sm font-medium text-base-700">
+                    Also works at
+                    <span className="ml-2 text-xs font-normal text-base-400">
+                      (e.g. drivers serving multiple stores)
+                    </span>
+                  </label>
+                  <div className="rounded-lg border border-base-200 bg-surface p-2 space-y-1 max-h-40 overflow-y-auto">
+                    {branches
+                      .filter((b) => b.id !== form.branch_id)
+                      .map((b) => (
+                        <label
+                          key={b.id}
+                          className="flex items-center gap-2 px-2 py-1 rounded hover:bg-surface-2 cursor-pointer text-sm"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={additionalBranchIds.includes(b.id)}
+                            onChange={() => toggleAdditionalBranch(b.id)}
+                            className="rounded border-base-300"
+                          />
+                          <span className="text-base-700">{b.name}</span>
+                        </label>
+                      ))}
+                  </div>
+                </div>
+              )}
 
               <Input
                 label="Start Date"

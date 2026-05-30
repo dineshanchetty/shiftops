@@ -235,10 +235,17 @@ function DailyDetailPanel({
   }
 
   // ─── Apply selection ──────────────────────────────────────────────────────
-  // value codes: ""=not scheduled (delete this row), "off"=leave/off,
-  //              "<templateId>"=working that template
+  // value codes:
+  //   ""            = not scheduled (delete this row)
+  //   "off"         = unpaid scheduled off
+  //   "paid_leave"  = paid leave — counts toward payroll hours (default 9h)
+  //   "<templateId>" = working that template
   // entryId: existing row to update/delete; null means create a new row
-  //          (used by the "Add another shift" trailing dropdown).
+  //          (used by the trailing "+ Add another shift" dropdown).
+
+  // Default leave-day length. Configurable per-tenant later; 9h matches the
+  // standard SA workday assumed elsewhere in the codebase.
+  const DEFAULT_LEAVE_HOURS = 9;
 
   async function handleSelect(staffId: string, entryId: string | null, value: string) {
     if (!branchId || !tenantId) return;
@@ -249,6 +256,8 @@ function DailyDetailPanel({
       (e) => e.staff_id === staffId && e.id !== entryId
     );
 
+    const isOffValue = value === "off" || value === "paid_leave";
+
     try {
       if (value === "") {
         // Not scheduled: delete this specific row if it exists
@@ -256,8 +265,8 @@ function DailyDetailPanel({
           await supabase.from("roster_entries").delete().eq("id", existing.id);
           setLocalEntries((prev) => prev.filter((e) => e.id !== existing.id));
         }
-      } else if (value === "off") {
-        // OFF / Leave is mutually exclusive — clear any other shift rows for this staff/day.
+      } else if (isOffValue) {
+        // Off / Paid Leave is mutually exclusive — clear any other shift rows for this staff/day.
         if (otherEntries.length > 0) {
           await supabase
             .from("roster_entries")
@@ -268,6 +277,7 @@ function DailyDetailPanel({
             );
         }
 
+        const isPaid = value === "paid_leave";
         const payload = {
           staff_id: staffId,
           branch_id: branchId,
@@ -275,8 +285,10 @@ function DailyDetailPanel({
           date: dateStr,
           shift_start: null,
           shift_end: null,
-          shift_hours: null,
+          // Paid leave hours flow through to payroll; unpaid off does not.
+          shift_hours: isPaid ? DEFAULT_LEAVE_HOURS : null,
           is_off: true,
+          leave_type: isPaid ? "paid_leave" : "off",
         };
         if (existing) {
           await supabase.from("roster_entries").update(payload).eq("id", existing.id);
@@ -388,8 +400,11 @@ function DailyDetailPanel({
     const isSaving = savingStaffId === s.id;
 
     let value = "";
-    if (entry?.is_off) value = "off";
-    else if (entry?.shift_start && entry?.shift_end) {
+    if (entry?.is_off) {
+      // Read leave_type from the row; legacy rows without leave_type fall back to "off".
+      const lt = (entry as unknown as { leave_type?: string | null }).leave_type;
+      value = lt === "paid_leave" ? "paid_leave" : "off";
+    } else if (entry?.shift_start && entry?.shift_end) {
       const matched = activeTemplates.find((t) =>
         t.shift_start.slice(0, 5) === entry.shift_start!.slice(0, 5) &&
         t.shift_end.slice(0, 5) === entry.shift_end!.slice(0, 5)
@@ -397,6 +412,7 @@ function DailyDetailPanel({
       if (matched) value = matched.id;
       else value = "custom";
     }
+    const isPaidLeave = value === "paid_leave";
 
     // Bar geometry
     let barLeft = 0;
@@ -439,7 +455,9 @@ function DailyDetailPanel({
             disabled={isSaving}
             className={cn(
               "w-full text-xs rounded-md border bg-white px-2 py-1 outline-none transition-colors",
-              entry?.is_off
+              isPaidLeave
+                ? "border-blue-300 bg-blue-50 text-blue-700"
+                : entry?.is_off
                 ? "border-amber-300 bg-amber-50 text-amber-700"
                 : hasBar
                 ? "border-base-200 text-base-700"
@@ -452,8 +470,13 @@ function DailyDetailPanel({
             {activeTemplates.map((t) => (
               <option key={t.id} value={t.id}>{tmplLabel(t)}</option>
             ))}
-            {/* Only the first row can flip to OFF (mutually exclusive). */}
-            {isFirst && !isTrailing && <option value="off">Leave / OFF</option>}
+            {/* Only the first row can flip to OFF / Leave (mutually exclusive). */}
+            {isFirst && !isTrailing && (
+              <>
+                <option value="off">Off (unpaid)</option>
+                <option value="paid_leave">Paid Leave (counts on payroll)</option>
+              </>
+            )}
             {value === "custom" && entry && (
               <option value="custom" disabled>
                 Custom: {entry.shift_start!.slice(0, 5)}–{entry.shift_end!.slice(0, 5)}
@@ -488,7 +511,15 @@ function DailyDetailPanel({
           )}
           {entry?.is_off && (
             <div className="absolute inset-0 flex items-center">
-              <span className="text-[10px] font-bold text-amber-600 bg-amber-100 rounded px-1.5 py-0.5">OFF / LEAVE</span>
+              {isPaidLeave ? (
+                <span className="text-[10px] font-bold text-blue-700 bg-blue-100 rounded px-1.5 py-0.5">
+                  PAID LEAVE ({DEFAULT_LEAVE_HOURS}h)
+                </span>
+              ) : (
+                <span className="text-[10px] font-bold text-amber-600 bg-amber-100 rounded px-1.5 py-0.5">
+                  OFF
+                </span>
+              )}
             </div>
           )}
         </div>

@@ -203,20 +203,40 @@ export async function getDriversFromRoster(
     });
   }
 
-  // Fallback: if no drivers rostered for this date, show all active driver staff
-  // so the manager can still enter driver data for the cashup
+  // Fallback: if no drivers rostered for this date, show all active drivers
+  // who work at this branch — either as their primary branch OR via the
+  // staff_branches m2m (shared delivery pools, e.g. Deliveree riders).
   if (drivers.length === 0) {
-    const { data: allDriverStaff } = await supabase
+    // Pull all staff_branches rows for this branch first, then enrich.
+    const { data: mappings } = await supabase
+      .from("staff_branches")
+      .select("staff_id")
+      .eq("branch_id", branchId)
+      .eq("tenant_id", tenantId);
+
+    const candidateIds = new Set<string>((mappings ?? []).map((m) => m.staff_id as string));
+    // Belt-and-braces: also include any active driver whose primary branch
+    // is this branch but who hasn't been backfilled into staff_branches.
+    const { data: primaryStaff } = await supabase
       .from("staff")
-      .select("id, first_name, last_name")
+      .select("id")
       .eq("branch_id", branchId)
       .eq("tenant_id", tenantId)
       .eq("position_id", driverPosition.id)
-      .eq("active", true)
-      .order("first_name");
+      .eq("active", true);
+    for (const s of primaryStaff ?? []) candidateIds.add(s.id as string);
 
-    if (allDriverStaff) {
-      for (const s of allDriverStaff) {
+    if (candidateIds.size > 0) {
+      const { data: driverStaff } = await supabase
+        .from("staff")
+        .select("id, first_name, last_name")
+        .in("id", Array.from(candidateIds))
+        .eq("tenant_id", tenantId)
+        .eq("position_id", driverPosition.id)
+        .eq("active", true)
+        .order("first_name");
+
+      for (const s of driverStaff ?? []) {
         drivers.push({
           staff_id: s.id,
           first_name: s.first_name,
