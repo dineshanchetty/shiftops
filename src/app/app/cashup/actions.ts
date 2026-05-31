@@ -38,6 +38,8 @@ export interface RosteredStaffEntry {
   shift_end: string | null;
   shift_hours: number | null;
   is_off: boolean;
+  /** 'paid_leave' / 'sick' / 'off' / null — see roster_entries.leave_type. */
+  leave_type: string | null;
 }
 
 export interface SaveCashupInput {
@@ -515,6 +517,15 @@ export async function getRosteredStaff(
     if (staff.position?.name?.toLowerCase() === "manager") continue;
     seen.add(staff.id);
 
+    const leaveType =
+      (entry as unknown as { leave_type?: string | null }).leave_type ?? null;
+
+    // Skip plain unpaid 'off' rows — there's nothing to attend.
+    // Paid leave / sick stay in the list so the manager can see them.
+    if ((entry.is_off ?? false) && leaveType !== "paid_leave" && leaveType !== "sick") {
+      continue;
+    }
+
     result.push({
       staff_id: staff.id,
       first_name: staff.first_name,
@@ -524,6 +535,7 @@ export async function getRosteredStaff(
       shift_end: entry.shift_end,
       shift_hours: entry.shift_hours,
       is_off: entry.is_off ?? false,
+      leave_type: leaveType,
     });
   }
 

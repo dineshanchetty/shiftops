@@ -39,19 +39,20 @@ export default function WagesVsTurnoverPage() {
         .lte("date", f.dateTo)
         .order("date", { ascending: true });
 
-      // Fetch roster entries for FOH/BOH staff wages
+      // Fetch roster entries — include is_off=true so paid_leave / sick get
+      // counted as wages. Unpaid 'off' is filtered out in the loop below.
       const { data: rosterEntries } = await supabase
         .from("roster_entries")
-        .select("date, shift_hours, is_off")
+        .select("date, shift_hours, is_off, leave_type")
         .in("branch_id", f.branchIds)
         .gte("date", f.dateFrom)
-        .lte("date", f.dateTo)
-        .eq("is_off", false);
+        .lte("date", f.dateTo);
 
       // Build roster wages by date
       const rosterWagesByDate = new Map<string, number>();
       if (rosterEntries) {
-        for (const re of rosterEntries as { date: string; shift_hours: number | null; is_off: boolean }[]) {
+        for (const re of rosterEntries as { date: string; shift_hours: number | null; is_off: boolean; leave_type: string | null }[]) {
+          if (re.is_off && re.leave_type !== "paid_leave" && re.leave_type !== "sick") continue;
           const hours = re.shift_hours ?? 0;
           const existing = rosterWagesByDate.get(re.date) ?? 0;
           rosterWagesByDate.set(re.date, existing + hours * DEFAULT_HOURLY_RATE);

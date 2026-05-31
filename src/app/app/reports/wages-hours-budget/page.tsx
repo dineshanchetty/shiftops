@@ -97,13 +97,14 @@ export default function WagesHoursBudgetPage() {
         { data: positions },
         { data: cashups },
       ] = await Promise.all([
+        // Include is_off=true rows so paid_leave / sick get counted (they have
+        // shift_hours and are paid). Unpaid 'off' is filtered out in the loop below.
         supabase
           .from("roster_entries")
           .select("*")
           .in("branch_id", f.branchIds)
           .gte("date", f.dateFrom)
-          .lte("date", f.dateTo)
-          .eq("is_off", false),
+          .lte("date", f.dateTo),
         supabase.from("attendance").select("roster_entry_id, actual_hours"),
         supabase
           .from("staff")
@@ -157,6 +158,12 @@ export default function WagesHoursBudgetPage() {
 
       if (entries) {
         for (const e of entries) {
+          // Skip unpaid 'off' — they earn / cost nothing.
+          // Paid leave / sick (is_off=true with leave_type='paid_leave'/'sick')
+          // still flow through with their rostered shift_hours.
+          const lt = (e as { leave_type?: string | null }).leave_type;
+          if (e.is_off && lt !== "paid_leave" && lt !== "sick") continue;
+
           const existing = staffAgg.get(e.staff_id) ?? {
             scheduled: 0,
             actual: 0,

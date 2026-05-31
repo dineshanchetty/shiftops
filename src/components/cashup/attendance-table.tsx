@@ -22,6 +22,9 @@ interface AttendanceRow {
   actual_end: string | null;
   actual_hours: number | null;
   status: AttendanceStatus;
+  /** 'paid_leave' / 'sick' / 'off' / null. Paid leave + sick are pre-filled
+   *  with the rostered shift_hours and are not time-editable. */
+  leave_type: string | null;
 }
 
 interface AttendanceTableProps {
@@ -74,18 +77,25 @@ export function AttendanceTable({
   // records to the attendance table instead of using local state only.
 
   const [rows, setRows] = useState<AttendanceRow[]>(() =>
-    rosteredStaff.map((s) => ({
-      staff_id: s.staff_id,
-      first_name: s.first_name,
-      last_name: s.last_name,
-      position_name: s.position_name,
-      scheduled_start: s.shift_start,
-      scheduled_end: s.shift_end,
-      actual_start: s.shift_start,
-      actual_end: s.shift_end,
-      actual_hours: calcHours(s.shift_start, s.shift_end),
-      status: "pending" as AttendanceStatus,
-    }))
+    rosteredStaff.map((s) => {
+      const isPaidLeave = s.leave_type === "paid_leave" || s.leave_type === "sick";
+      return {
+        staff_id: s.staff_id,
+        first_name: s.first_name,
+        last_name: s.last_name,
+        position_name: s.position_name,
+        scheduled_start: s.shift_start,
+        scheduled_end: s.shift_end,
+        actual_start: s.shift_start,
+        actual_end: s.shift_end,
+        // Paid leave has no shift_start/end — credit the rostered shift_hours directly.
+        actual_hours: isPaidLeave
+          ? s.shift_hours ?? null
+          : calcHours(s.shift_start, s.shift_end),
+        status: isPaidLeave ? ("confirmed" as AttendanceStatus) : ("pending" as AttendanceStatus),
+        leave_type: s.leave_type,
+      };
+    })
   );
 
   const [saved, setSaved] = useState(false);
@@ -218,24 +228,35 @@ export function AttendanceTable({
           <tbody>
             {rows.map((row) => {
               const config = STATUS_CONFIG[row.status];
+              const isPaidLeave =
+                row.leave_type === "paid_leave" || row.leave_type === "sick";
+              const leaveLabel =
+                row.leave_type === "sick" ? "SICK LEAVE" : "PAID LEAVE";
               return (
                 <tr
                   key={row.staff_id}
                   className={cn(
                     "border-b border-base-100 last:border-b-0 h-[36px]",
-                    config.rowClass
+                    isPaidLeave ? "bg-blue-50/40" : config.rowClass
                   )}
                 >
                   {/* Staff name */}
                   <td className="px-3 py-1.5">
-                    <span
-                      className={cn(
-                        "text-sm font-medium text-base-800",
-                        row.status === "absent" && "line-through text-base-400"
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={cn(
+                          "text-sm font-medium text-base-800",
+                          row.status === "absent" && "line-through text-base-400"
+                        )}
+                      >
+                        {row.first_name} {row.last_name}
+                      </span>
+                      {isPaidLeave && (
+                        <span className="text-[10px] font-bold text-blue-700 bg-blue-100 rounded px-1.5 py-0.5">
+                          {leaveLabel}
+                        </span>
                       )}
-                    >
-                      {row.first_name} {row.last_name}
-                    </span>
+                    </div>
                   </td>
 
                   {/* Position */}
@@ -248,38 +269,48 @@ export function AttendanceTable({
                   {/* Scheduled times */}
                   <td className="px-3 py-1.5">
                     <span className="text-xs font-mono text-base-500">
-                      {formatTimeShort(row.scheduled_start)}–{formatTimeShort(row.scheduled_end)}
+                      {isPaidLeave
+                        ? "—"
+                        : `${formatTimeShort(row.scheduled_start)}–${formatTimeShort(row.scheduled_end)}`}
                     </span>
                   </td>
 
                   {/* Actual Start */}
                   <td className="px-3 py-1.5">
-                    <input
-                      type="time"
-                      value={row.actual_start ?? ""}
-                      onChange={(e) =>
-                        updateRow(row.staff_id, {
-                          actual_start: e.target.value || null,
-                        })
-                      }
-                      disabled={readOnly || row.status === "absent"}
-                      className="h-[30px] w-[90px] rounded border border-base-200 bg-surface px-1.5 text-xs font-mono text-base-700 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50 disabled:cursor-not-allowed"
-                    />
+                    {isPaidLeave ? (
+                      <span className="text-xs font-mono text-base-400">—</span>
+                    ) : (
+                      <input
+                        type="time"
+                        value={row.actual_start ?? ""}
+                        onChange={(e) =>
+                          updateRow(row.staff_id, {
+                            actual_start: e.target.value || null,
+                          })
+                        }
+                        disabled={readOnly || row.status === "absent"}
+                        className="h-[30px] w-[90px] rounded border border-base-200 bg-surface px-1.5 text-xs font-mono text-base-700 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50 disabled:cursor-not-allowed"
+                      />
+                    )}
                   </td>
 
                   {/* Actual End */}
                   <td className="px-3 py-1.5">
-                    <input
-                      type="time"
-                      value={row.actual_end ?? ""}
-                      onChange={(e) =>
-                        updateRow(row.staff_id, {
-                          actual_end: e.target.value || null,
-                        })
-                      }
-                      disabled={readOnly || row.status === "absent"}
-                      className="h-[30px] w-[90px] rounded border border-base-200 bg-surface px-1.5 text-xs font-mono text-base-700 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50 disabled:cursor-not-allowed"
-                    />
+                    {isPaidLeave ? (
+                      <span className="text-xs font-mono text-base-400">—</span>
+                    ) : (
+                      <input
+                        type="time"
+                        value={row.actual_end ?? ""}
+                        onChange={(e) =>
+                          updateRow(row.staff_id, {
+                            actual_end: e.target.value || null,
+                          })
+                        }
+                        disabled={readOnly || row.status === "absent"}
+                        className="h-[30px] w-[90px] rounded border border-base-200 bg-surface px-1.5 text-xs font-mono text-base-700 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50 disabled:cursor-not-allowed"
+                      />
+                    )}
                   </td>
 
                   {/* Actual Hours */}

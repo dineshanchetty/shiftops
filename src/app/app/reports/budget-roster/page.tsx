@@ -149,11 +149,16 @@ export default function BudgetRosterPage() {
       setStaffList(allStaff);
 
       // Build entry lookup: date+staffId -> hours
+      // Paid leave (is_off=true, leave_type='paid_leave'/'sick') still counts.
       const entryLookup = new Map<string, number>();
       if (entries) {
         for (const e of entries) {
+          const lt = (e as { leave_type?: string | null }).leave_type;
+          const isPaidLeave = e.is_off && (lt === "paid_leave" || lt === "sick");
+          const isUnpaidOff = e.is_off && !isPaidLeave;
+          if (isUnpaidOff) continue;
           const key = `${e.date}|${e.staff_id}`;
-          const hours = e.is_off ? 0 : (e.shift_hours ?? 0);
+          const hours = e.shift_hours ?? 0;
           entryLookup.set(key, (entryLookup.get(key) ?? 0) + hours);
         }
       }
