@@ -41,6 +41,8 @@ interface CalendarGridProps {
   closingTime?: string;
   branchId?: string;
   tenantId?: string;
+  /** Hours credited to a Paid Leave / sick day (from tenants.default_leave_hours). */
+  defaultLeaveHours?: number;
   onEntryUpdated?: () => void;
 }
 
@@ -152,6 +154,7 @@ interface DailyDetailPanelProps {
   closingTime?: string;
   branchId?: string;
   tenantId?: string;
+  defaultLeaveHours: number;
 }
 
 function DailyDetailPanel({
@@ -165,6 +168,7 @@ function DailyDetailPanel({
   closingTime,
   branchId,
   tenantId,
+  defaultLeaveHours,
   onEntryUpdated,
 }: DailyDetailPanelProps) {
   const supabase = createClient();
@@ -243,9 +247,8 @@ function DailyDetailPanel({
   // entryId: existing row to update/delete; null means create a new row
   //          (used by the trailing "+ Add another shift" dropdown).
 
-  // Default leave-day length. Configurable per-tenant later; 9h matches the
-  // standard SA workday assumed elsewhere in the codebase.
-  const DEFAULT_LEAVE_HOURS = 9;
+  // Leave-day length — sourced from tenants.default_leave_hours via prop.
+  const DEFAULT_LEAVE_HOURS = defaultLeaveHours;
 
   async function handleSelect(staffId: string, entryId: string | null, value: string) {
     if (!branchId || !tenantId) return;
@@ -680,6 +683,7 @@ export function CalendarGrid({
   closingTime,
   branchId,
   tenantId,
+  defaultLeaveHours,
   onEntryUpdated,
 }: CalendarGridProps) {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -953,6 +957,7 @@ export function CalendarGrid({
           closingTime={closingTime}
           branchId={effectiveBranchId}
           tenantId={effectiveTenantId}
+          defaultLeaveHours={defaultLeaveHours ?? 9}
         />
       )}
     </div>

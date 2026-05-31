@@ -23,10 +23,14 @@ export interface TeamMember {
  * List all members of the caller's tenant. Owner-only.
  *
  * Joins tenant_members → auth.users via the service-role client to surface
- * email + last-sign-in-at, which RLS hides from the regular client.
+ * email + last-sign-in-at, which RLS hides from the regular client. If
+ * SUPABASE_SERVICE_ROLE_KEY is not configured we still return the member
+ * list — just without emails — and set serviceUnavailable so the UI can
+ * tell the admin to add the env var.
  */
 export async function listTeamMembers(): Promise<
-  { ok: true; members: TeamMember[] } | { ok: false; error: string }
+  | { ok: true; members: TeamMember[]; serviceUnavailable?: boolean }
+  | { ok: false; error: string }
 > {
   const guard = await requireOwner();
   if (!guard.ok) return guard;
@@ -48,29 +52,40 @@ export async function listTeamMembers(): Promise<
 
   if (error) return { ok: false, error: error.message };
 
-  // Look up email + last_sign_in via service-role admin API.
-  const service = createServiceClient();
-  const byUserId = new Map<string, { email: string; last_sign_in_at: string | null; confirmed_at: string | null }>();
+  // Try the admin API for emails. If the env var isn't set OR the call errors,
+  // fall back to a list without emails rather than blowing up the whole page.
+  const byUserId = new Map<
+    string,
+    { email: string; last_sign_in_at: string | null; confirmed_at: string | null }
+  >();
+  let serviceUnavailable = false;
 
-  // listUsers is paginated; loop until empty.
-  let page = 1;
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const { data, error: listErr } = await service.auth.admin.listUsers({
-      page,
-      perPage: 200,
-    });
-    if (listErr) return { ok: false, error: listErr.message };
-    if (!data.users || data.users.length === 0) break;
-    for (const u of data.users) {
-      byUserId.set(u.id, {
-        email: u.email ?? "(no email)",
-        last_sign_in_at: u.last_sign_in_at ?? null,
-        confirmed_at: u.email_confirmed_at ?? u.confirmed_at ?? null,
+  try {
+    const service = createServiceClient();
+    let page = 1;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { data, error: listErr } = await service.auth.admin.listUsers({
+        page,
+        perPage: 200,
       });
+      if (listErr) {
+        serviceUnavailable = true;
+        break;
+      }
+      if (!data.users || data.users.length === 0) break;
+      for (const u of data.users) {
+        byUserId.set(u.id, {
+          email: u.email ?? "(no email)",
+          last_sign_in_at: u.last_sign_in_at ?? null,
+          confirmed_at: u.email_confirmed_at ?? u.confirmed_at ?? null,
+        });
+      }
+      if (data.users.length < 200) break;
+      page += 1;
     }
-    if (data.users.length < 200) break;
-    page += 1;
+  } catch {
+    serviceUnavailable = true;
   }
 
   const result: TeamMember[] = (members ?? []).map((m) => {
@@ -78,17 +93,17 @@ export async function listTeamMembers(): Promise<
     return {
       id: m.id,
       user_id: m.user_id,
-      email: u?.email ?? "(unknown)",
+      email: u?.email ?? (m.user_id === user.id ? user.email ?? "(you)" : "(email unavailable)"),
       role: m.role as TeamRole,
       branch_ids: m.branch_ids ?? [],
       is_self: m.user_id === user.id,
       created_at: m.created_at,
       last_sign_in_at: u?.last_sign_in_at ?? null,
-      pending_invite: !u?.confirmed_at && !u?.last_sign_in_at,
+      pending_invite: u ? !u.confirmed_at && !u.last_sign_in_at : false,
     };
   });
 
-  return { ok: true, members: result };
+  return { ok: true, members: result, serviceUnavailable };
 }
 
 /**
@@ -118,7 +133,16 @@ export async function inviteTeamMember(
   const { data: tenantId } = await supabase.rpc("get_user_tenant_id");
   if (!tenantId) return { ok: false, error: "No tenant found" };
 
-  const service = createServiceClient();
+  let service: ReturnType<typeof createServiceClient>;
+  try {
+    service = createServiceClient();
+  } catch {
+    return {
+      ok: false,
+      error:
+        "Email invites require SUPABASE_SERVICE_ROLE_KEY in your Azure env vars. See the warning at the top of this page.",
+    };
+  }
 
   // Does this email already have an auth user?
   let targetUserId: string | null = null;

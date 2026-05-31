@@ -888,6 +888,7 @@ export type Database = {
           primary_color: string | null
           slug: string
           trial_ends_at: string | null
+          default_leave_hours: number
         }
         Insert: {
           billing_email?: string | null
@@ -900,6 +901,7 @@ export type Database = {
           primary_color?: string | null
           slug: string
           trial_ends_at?: string | null
+          default_leave_hours?: number
         }
         Update: {
           billing_email?: string | null
@@ -912,6 +914,7 @@ export type Database = {
           primary_color?: string | null
           slug?: string
           trial_ends_at?: string | null
+          default_leave_hours?: number
         }
         Relationships: []
       }

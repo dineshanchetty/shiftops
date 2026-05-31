@@ -32,6 +32,7 @@ export default function RosterPage() {
   const [subPositions, setSubPositions] = useState<SubPosition[]>([]);
   const [staff, setStaff] = useState<Staff[]>([]);
   const [tenantId, setTenantId] = useState<string>("");
+  const [defaultLeaveHours, setDefaultLeaveHours] = useState<number>(9);
   const [branchName, setBranchName] = useState<string>("");
 
   // Selected branch operations data
@@ -95,9 +96,19 @@ export default function RosterPage() {
   // Load reference data on mount
   useEffect(() => {
     async function loadReferenceData() {
-      // Get tenant ID
+      // Get tenant ID + default leave hours
       const { data: tid } = await supabase.rpc("get_user_tenant_id");
-      if (tid) setTenantId(tid);
+      if (tid) {
+        setTenantId(tid);
+        const { data: tenantRow } = await supabase
+          .from("tenants")
+          .select("default_leave_hours")
+          .eq("id", tid)
+          .single();
+        if (tenantRow?.default_leave_hours != null) {
+          setDefaultLeaveHours(Number(tenantRow.default_leave_hours));
+        }
+      }
 
       // Get branches
       const { data: branchData } = await supabase
@@ -425,6 +436,7 @@ export default function RosterPage() {
         closingTime={selectedBranchData?.closing_time ? selectedBranchData.closing_time.slice(0, 5) : undefined}
         branchId={filters.branchId}
         tenantId={tenantId}
+        defaultLeaveHours={defaultLeaveHours}
         onEntryUpdated={loadEntries}
       />
 

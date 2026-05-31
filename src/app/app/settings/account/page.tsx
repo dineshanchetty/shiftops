@@ -32,6 +32,7 @@ interface TenantData {
   slug: string;
   billingEmail: string;
   logoUrl: string | null;
+  defaultLeaveHours: number;
 }
 
 type FeedbackState = {
@@ -79,6 +80,7 @@ export default function AccountSettingsPage() {
     slug: "",
     billingEmail: "",
     logoUrl: null,
+    defaultLeaveHours: 9,
   });
   const [savingCompany, setSavingCompany] = useState(false);
   const [companyFeedback, setCompanyFeedback] = useState<FeedbackState>(null);
@@ -117,7 +119,7 @@ export default function AccountSettingsPage() {
     if (tenantId) {
       const { data: tenantRow } = await supabase
         .from("tenants")
-        .select("id, name, slug, billing_email, logo_url")
+        .select("id, name, slug, billing_email, logo_url, default_leave_hours")
         .eq("id", tenantId)
         .single();
 
@@ -128,6 +130,7 @@ export default function AccountSettingsPage() {
           slug: tenantRow.slug,
           billingEmail: tenantRow.billing_email ?? "",
           logoUrl: tenantRow.logo_url ?? null,
+          defaultLeaveHours: Number(tenantRow.default_leave_hours ?? 9),
         });
       }
     }
@@ -168,11 +171,21 @@ export default function AccountSettingsPage() {
     setCompanyFeedback(null);
 
     const supabase = createClient();
+    const leaveHours = Number(tenant.defaultLeaveHours);
+    if (Number.isNaN(leaveHours) || leaveHours < 0 || leaveHours > 24) {
+      setCompanyFeedback({
+        type: "error",
+        message: "Default leave hours must be between 0 and 24.",
+      });
+      setSavingCompany(false);
+      return;
+    }
     const { error } = await supabase
       .from("tenants")
       .update({
         name: tenant.name,
         billing_email: tenant.billingEmail || null,
+        default_leave_hours: leaveHours,
       })
       .eq("id", tenant.id);
 
@@ -469,6 +482,27 @@ export default function AccountSettingsPage() {
               }
               placeholder="billing@company.co.za"
             />
+
+            <div>
+              <Input
+                label="Default Paid-Leave Hours / Day"
+                type="number"
+                step="0.25"
+                min="0"
+                max="24"
+                value={String(tenant.defaultLeaveHours)}
+                onChange={(e) =>
+                  setTenant((t) => ({
+                    ...t,
+                    defaultLeaveHours: Number(e.target.value),
+                  }))
+                }
+              />
+              <p className="mt-1 text-xs text-base-500">
+                Hours credited when a manager picks &quot;Paid Leave&quot; on the
+                roster (and on the Sage Pastel payroll export). Default 9 = SA standard workday.
+              </p>
+            </div>
 
             <Feedback state={companyFeedback} />
 
