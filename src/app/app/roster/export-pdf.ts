@@ -260,11 +260,38 @@ export function exportRosterPdf(
     td.total-col { text-align: center; background: #f3f4f6; font-size: 10px; }
     td.out { background: #f9fafb; }
 
-    td.cell.has-split { background: #fffbeb; } /* highlight split-shift days */
+    /* Split-shift cells get a strong amber outline + corner badge so the eye
+       catches them even with blue shift tiles inside. */
+    td.cell.has-split {
+      background: #fef3c7;
+      border: 2px solid #f59e0b;
+      position: relative;
+      padding-top: 12px; /* room for the badge */
+    }
+    td.cell.has-split::before {
+      content: 'DOUBLE';
+      position: absolute;
+      top: 0; right: 0;
+      background: #f59e0b;
+      color: #fff;
+      font-size: 7px;
+      font-weight: 700;
+      padding: 1px 4px;
+      letter-spacing: 0.5px;
+      border-bottom-left-radius: 3px;
+    }
     .shift {
       display: block; background: #eff6ff; border-left: 2px solid #2563eb;
       padding: 1px 3px; border-radius: 2px; margin-bottom: 2px; line-height: 1.25;
     }
+    /* Inside a split-shift cell, give the inner tiles a touch of amber bleed
+       through (transparent border) so the cell context stays visible. */
+    td.cell.has-split .shift {
+      background: #ffffff;
+      border-left: 2px solid #b45309;
+    }
+    td.cell.has-split .shift-time { color: #92400e; }
+    td.cell.has-split .shift-hrs  { color: #b45309; }
     .shift-time { font-family: ui-monospace, monospace; font-weight: 600; font-size: 9px; color: #1e40af; }
     .shift-hrs  { font-family: ui-monospace, monospace; font-size: 8px; color: #2563eb; }
 
@@ -309,7 +336,7 @@ export function exportRosterPdf(
 
   <div class="legend">
     <span class="legend-item"><span class="legend-swatch" style="background:#eff6ff;border-left:2px solid #2563eb;"></span> Working shift</span>
-    <span class="legend-item"><span class="legend-swatch" style="background:#fffbeb;border:1px solid #f59e0b;"></span> Split-shift day (two or more shifts)</span>
+    <span class="legend-item"><span class="legend-swatch" style="background:#fef3c7;border:2px solid #f59e0b;"></span> Split-shift day (two or more shifts — marked DOUBLE)</span>
     <span class="legend-item"><span class="legend-swatch" style="background:#dbeafe;border-left:2px solid #1d4ed8;"></span> Paid Leave / Sick (paid)</span>
     <span class="legend-item"><span class="legend-swatch" style="background:#fef3c7;border-left:2px solid #d97706;"></span> OFF (unpaid)</span>
   </div>
