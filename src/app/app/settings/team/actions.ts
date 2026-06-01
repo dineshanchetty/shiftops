@@ -165,16 +165,69 @@ export async function inviteTeamMember(
   }
 
   if (!targetUserId) {
-    // Send invite — Supabase emails them a magic link to set a password.
-    const { data: inviteData, error: inviteErr } =
-      await service.auth.admin.inviteUserByEmail(trimmed);
-    if (inviteErr || !inviteData?.user) {
+    // Create the auth user + magic invite link via the admin API.
+    // We deliberately do NOT call inviteUserByEmail — that goes via Supabase's
+    // default SMTP which is heavily rate-limited and frequently silently drops
+    // mail. Instead we generate the link and dispatch the email ourselves via
+    // SendGrid (the same pipeline that already handles inbound + reminders).
+    const { data: linkData, error: linkErr } = await service.auth.admin.generateLink({
+      type: "invite",
+      email: trimmed,
+    });
+    if (linkErr || !linkData?.user) {
       return {
         ok: false,
-        error: inviteErr?.message ?? "Failed to send invite email.",
+        error: linkErr?.message ?? "Failed to create invite link.",
       };
     }
-    targetUserId = inviteData.user.id;
+    targetUserId = linkData.user.id;
+
+    // Look up the tenant name + the inviter's name to make the email nicer.
+    const [{ data: tenantRow }, { data: { user: inviter } }] = await Promise.all([
+      service.from("tenants").select("name").eq("id", tenantId).maybeSingle(),
+      supabase.auth.getUser(),
+    ]);
+    const tenantName = tenantRow?.name ?? "ShiftOps";
+    const inviterName =
+      (inviter?.user_metadata?.full_name as string | undefined) ??
+      (inviter?.user_metadata?.name as string | undefined) ??
+      inviter?.email ??
+      "Your team";
+
+    // Fire-and-forget: even if SendGrid hiccups, the user can still be invited
+    // again from the same page. Don't fail the whole action over a transient
+    // email error — the tenant_members row insert below is what actually grants
+    // access and that's still happening atomically.
+    const inviteUrl = linkData.properties?.action_link;
+    if (inviteUrl) {
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      try {
+        const res = await fetch(`${supabaseUrl}/functions/v1/send-notification`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            // Edge function requires a Bearer token; the service-role key works.
+            Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+          },
+          body: JSON.stringify({
+            type: "invite",
+            recipientEmail: trimmed,
+            data: {
+              tenantName,
+              inviterName,
+              inviteUrl,
+              role: role === "owner" ? "Admin" : "Manager",
+            },
+          }),
+        });
+        if (!res.ok) {
+          const errText = await res.text();
+          console.error("send-notification failed:", res.status, errText);
+        }
+      } catch (e) {
+        console.error("send-notification dispatch error:", e);
+      }
+    }
   }
 
   // Check for an existing membership first to avoid noisy unique-constraint errors.
