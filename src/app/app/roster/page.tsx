@@ -10,6 +10,7 @@ import { RosterSummary } from "@/components/roster/roster-summary";
 import { ShiftEditor } from "@/components/roster/shift-editor";
 import { getRosterEntries, saveRosterEntries, deleteRosterEntry } from "./actions";
 import { exportRosterPdf } from "./export-pdf";
+import { useAuth } from "@/lib/auth-context";
 import { FileDown, Wand2 } from "lucide-react";
 import Link from "next/link";
 import type { Branch, Position, SubPosition, Staff, RosterEntry } from "@/lib/types";
@@ -34,6 +35,7 @@ export default function RosterPage() {
   const [tenantId, setTenantId] = useState<string>("");
   const [defaultLeaveHours, setDefaultLeaveHours] = useState<number>(9);
   const [branchName, setBranchName] = useState<string>("");
+  const { tenant } = useAuth();
 
   // Selected branch operations data
   const [selectedBranchData, setSelectedBranchData] = useState<Branch | null>(null);
@@ -384,7 +386,10 @@ export default function RosterPage() {
   }
 
   function handleExportPdf() {
-    exportRosterPdf(entries, branchName || "All Branches", dateRange);
+    exportRosterPdf(entries, branchName || "All Branches", dateRange, {
+      tenantName: tenant?.name ?? null,
+      tenantLogoUrl: tenant?.logo_url ?? null,
+    });
   }
 
   return (
