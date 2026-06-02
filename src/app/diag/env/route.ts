@@ -1,11 +1,12 @@
 /**
  * Owner-only diagnostic endpoint to check which env vars the running SSR
  * server can actually see. Never echoes secret values — only presence +
- * length + first/last 3 chars so you can verify it matches what you set
- * without leaking the full key in browser history or logs.
+ * length + first/last 3 chars.
  *
- * Hit:  /api/_debug/env
- * Returns 403 if not signed in as an owner.
+ * Lives outside /api/ because Azure SWA intercepts /api/* for its own
+ * Functions runtime, returning 404 for routes Next.js owns.
+ *
+ * Hit:  /diag/env
  */
 
 import { NextResponse } from "next/server";
@@ -44,7 +45,6 @@ export async function GET() {
   return NextResponse.json({
     runtime: {
       node_version: process.version,
-      vercel: !!process.env.VERCEL,
       azure_swa_env: process.env.AZURE_STATIC_WEB_APPS_ENVIRONMENT ?? null,
     },
     env: {
