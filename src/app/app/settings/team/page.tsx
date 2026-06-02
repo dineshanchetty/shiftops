@@ -24,11 +24,12 @@ export default async function TeamPage() {
     >
       {result.serviceUnavailable && (
         <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <strong>Email invites are disabled.</strong> Set{" "}
+          <strong>Adding new users is disabled.</strong> Set{" "}
           <code className="font-mono text-xs bg-amber-100 px-1 rounded">SUPABASE_SERVICE_ROLE_KEY</code>{" "}
-          in your Azure Static Web App configuration (Supabase Dashboard → Project Settings → API
-          → service_role). Until then you can see members + change roles, but new invites and
-          email lookups won&apos;t work.
+          in your Azure Static Web App environment variables (copy it from
+          Supabase Dashboard → Project Settings → API → <code className="font-mono text-xs bg-amber-100 px-1 rounded">service_role</code>).
+          Until then you can see members and change roles, but you can&apos;t add new users or
+          look up emails.
         </div>
       )}
       <TeamPanel initialMembers={result.members} />
