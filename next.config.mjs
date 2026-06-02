@@ -23,6 +23,23 @@ const cspDirectives = [
 
 const nextConfig = {
   output: "standalone",
+
+  // Server-only env vars that must be available at SSR runtime on Azure SWA.
+  //
+  // SWA's Application Settings don't reach the Next.js managed function in
+  // this project's setup (verified via /diag/env). Build-time env vars
+  // injected by the GitHub Actions workflow DO reach the build, so we use
+  // `env` to inline them into the server bundle. The corresponding GitHub
+  // repo secret is named the same.
+  //
+  // SAFETY: `env` inlines values into BOTH client and server bundles. Service
+  // role keys must never be imported from a client component. The
+  // `import "server-only"` guard at the top of src/lib/supabase/service.ts
+  // makes that a build error if anyone tries.
+  env: {
+    SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+  },
+
   async headers() {
     return [
       {

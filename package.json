@@ -27,6 +27,7 @@
     "react": "^18",
     "react-dom": "^18",
     "react-hook-form": "^7.72.1",
+    "server-only": "^0.0.1",
     "tailwind-merge": "^3.5.0",
     "xlsx": "^0.18.5",
     "zod": "^4.3.6"
