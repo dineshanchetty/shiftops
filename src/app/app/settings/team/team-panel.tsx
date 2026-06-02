@@ -3,7 +3,6 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
-  inviteTeamMember,
   createTeamMemberWithPassword,
   updateTeamMemberRole,
   removeTeamMember,
@@ -18,9 +17,7 @@ import {
   CardDescription,
   CardContent,
 } from "@/components/ui/card";
-import { Loader2, Mail, Trash2, Shield, ShieldCheck, KeyRound, Copy, Check } from "lucide-react";
-
-type InviteMode = "email" | "manual";
+import { Loader2, Trash2, Shield, ShieldCheck, KeyRound, Copy, Check } from "lucide-react";
 
 interface IssuedCredentials {
   email: string;
@@ -43,7 +40,6 @@ function formatDate(iso: string | null): string {
 export function TeamPanel({ initialMembers }: TeamPanelProps) {
   const router = useRouter();
   const [members, setMembers] = useState<TeamMember[]>(initialMembers);
-  const [mode, setMode] = useState<InviteMode>("email");
   const [email, setEmail] = useState("");
   const [fullName, setFullName] = useState("");
   const [inviteRole, setInviteRole] = useState<TeamRole>("manager");
@@ -70,34 +66,18 @@ export function TeamPanel({ initialMembers }: TeamPanelProps) {
     router.refresh();
   }
 
-  function handleInvite(e: React.FormEvent) {
+  function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     setFeedback(null);
     setIssued(null);
     startTransition(async () => {
-      if (mode === "manual") {
-        const res = await createTeamMemberWithPassword(email, inviteRole, fullName);
-        if (res.ok) {
-          // Surface the credentials modal — copy them out before dismissing,
-          // they cannot be retrieved later.
-          setIssued({ email: res.email, tempPassword: res.tempPassword });
-          setEmail("");
-          setFullName("");
-          setInviteRole("manager");
-          refresh();
-        } else {
-          setFeedback({ type: "err", text: res.error });
-        }
-        return;
-      }
-
-      const res = await inviteTeamMember(email, inviteRole);
+      const res = await createTeamMemberWithPassword(email, inviteRole, fullName);
       if (res.ok) {
-        setFeedback({
-          type: "ok",
-          text: `Invite sent to ${email}. They'll receive an email to set their password.`,
-        });
+        // Surface the credentials modal — copy them out before dismissing,
+        // they cannot be retrieved later.
+        setIssued({ email: res.email, tempPassword: res.tempPassword });
         setEmail("");
+        setFullName("");
         setInviteRole("manager");
         refresh();
       } else {
@@ -146,67 +126,40 @@ export function TeamPanel({ initialMembers }: TeamPanelProps) {
 
   return (
     <div className="space-y-6">
-      {/* Invite card */}
+      {/* Add-user card */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent/10 text-accent">
-              {mode === "email" ? <Mail size={20} /> : <KeyRound size={20} />}
+              <KeyRound size={20} />
             </div>
             <div className="flex-1">
               <CardTitle>Add a team member</CardTitle>
               <CardDescription className="mt-1">
-                {mode === "email"
-                  ? "They'll get an email to set their password and land directly in your tenant."
-                  : "Generate a temporary password to hand over manually. The user will be forced to change it on first sign-in."}
+                Generates a temporary password for you to hand over. The user is
+                forced to change it on first sign-in.
               </CardDescription>
             </div>
-          </div>
-
-          {/* Mode toggle */}
-          <div className="mt-4 inline-flex rounded-lg border border-base-200 p-0.5 bg-base-50 text-xs">
-            <button
-              type="button"
-              onClick={() => setMode("email")}
-              className={`px-3 py-1.5 rounded-md font-medium transition ${
-                mode === "email" ? "bg-white shadow-sm text-base-900" : "text-base-500 hover:text-base-700"
-              }`}
-            >
-              <Mail size={12} className="inline -mt-0.5 mr-1" />
-              Email invite
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("manual")}
-              className={`px-3 py-1.5 rounded-md font-medium transition ${
-                mode === "manual" ? "bg-white shadow-sm text-base-900" : "text-base-500 hover:text-base-700"
-              }`}
-            >
-              <KeyRound size={12} className="inline -mt-0.5 mr-1" />
-              Generate password
-            </button>
           </div>
         </CardHeader>
         <CardContent>
           <form
-            onSubmit={handleInvite}
+            onSubmit={handleCreate}
             className="flex flex-col sm:flex-row gap-3 sm:items-end"
           >
-            {mode === "manual" && (
-              <div className="sm:w-[180px]">
-                <label className="text-xs font-medium text-base-600 block mb-1.5">
-                  Full name
-                </label>
-                <input
-                  type="text"
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  placeholder="Jane Doe"
-                  disabled={busy}
-                  className="w-full h-10 px-3 rounded-lg border border-base-200 bg-white text-sm text-base-900 outline-none focus:border-accent"
-                />
-              </div>
-            )}
+            <div className="sm:w-[180px]">
+              <label className="text-xs font-medium text-base-600 block mb-1.5">
+                Full name
+              </label>
+              <input
+                type="text"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="Jane Doe"
+                disabled={busy}
+                className="w-full h-10 px-3 rounded-lg border border-base-200 bg-white text-sm text-base-900 outline-none focus:border-accent"
+              />
+            </div>
             <div className="flex-1">
               <label className="text-xs font-medium text-base-600 block mb-1.5">
                 Email address
@@ -236,14 +189,8 @@ export function TeamPanel({ initialMembers }: TeamPanelProps) {
               </select>
             </div>
             <Button type="submit" disabled={busy || !email}>
-              {busy ? (
-                <Loader2 className="animate-spin" size={14} />
-              ) : mode === "email" ? (
-                <Mail size={14} />
-              ) : (
-                <KeyRound size={14} />
-              )}
-              {mode === "email" ? "Send invite" : "Create user"}
+              {busy ? <Loader2 className="animate-spin" size={14} /> : <KeyRound size={14} />}
+              Create user
             </Button>
           </form>
 
