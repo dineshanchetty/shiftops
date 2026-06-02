@@ -32,6 +32,13 @@ jobs:
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          # Server-only key used by Settings → Team (admin user creation) and
+          # any other server action that needs to bypass RLS. Add this as a
+          # GitHub repo secret: Settings → Secrets and variables → Actions.
+          # Azure SWA's Application Settings only expose vars to API functions,
+          # NOT to the Next.js SSR server — env vars have to come in via the
+          # build step for SSR to see them.
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
   close_pull_request_job:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
