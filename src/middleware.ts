@@ -42,6 +42,19 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(url);
     }
 
+    // --- Forced password change ---
+    // Users created via the manual "Generate password" flow on the Team page
+    // carry must_change_password=true in user_metadata until they pick their
+    // own password. Send them to /app/change-password before anything else.
+    const mustChange =
+      (user.user_metadata as { must_change_password?: boolean } | null)
+        ?.must_change_password === true;
+    if (mustChange && !pathname.startsWith("/app/change-password")) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/app/change-password";
+      return NextResponse.redirect(url);
+    }
+
     // --- Role-based route protection ---
     const requiredRoles = getRequiredRoles(pathname);
 

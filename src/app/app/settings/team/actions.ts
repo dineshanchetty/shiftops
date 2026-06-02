@@ -261,6 +261,136 @@ export async function inviteTeamMember(
   return { ok: true };
 }
 
+/**
+ * Create a team member by hand with a system-generated temporary password.
+ * No email is sent — owner shows the credentials to the user out-of-band.
+ * The user is flagged as `must_change_password=true` and will be forced into
+ * the password-reset flow on first sign-in.
+ *
+ * Returns the email + temp password in the success payload so the owner can
+ * copy them. After dismissing the dialog the password CANNOT be retrieved —
+ * if lost, the owner has to recreate or reset the user.
+ */
+export async function createTeamMemberWithPassword(
+  email: string,
+  role: TeamRole,
+  fullName?: string
+): Promise<
+  | { ok: true; email: string; tempPassword: string }
+  | { ok: false; error: string }
+> {
+  const guard = await requireOwner();
+  if (!guard.ok) return guard;
+
+  const trimmed = email.trim().toLowerCase();
+  if (!trimmed || !trimmed.includes("@")) {
+    return { ok: false, error: "Enter a valid email address." };
+  }
+  if (role !== "owner" && role !== "manager") {
+    return { ok: false, error: "Invalid role." };
+  }
+
+  const supabase = await createClient();
+  const { data: tenantId } = await supabase.rpc("get_user_tenant_id");
+  if (!tenantId) return { ok: false, error: "No tenant found" };
+
+  let service: ReturnType<typeof createServiceClient>;
+  try {
+    service = createServiceClient();
+  } catch {
+    return {
+      ok: false,
+      error:
+        "Manual user creation requires SUPABASE_SERVICE_ROLE_KEY in your env vars. See the warning at the top of this page.",
+    };
+  }
+
+  // Generate a memorable but secure temp password.
+  // Pattern: ShiftOps-XXXX-XXXX (case-mixed letters + digits, no ambiguous chars).
+  // Long enough to clear Supabase's default 6-char min and any tightened policy.
+  const tempPassword = generateTempPassword();
+
+  // Does an auth user already exist for this email?
+  let targetUserId: string | null = null;
+  let page = 1;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { data, error: listErr } = await service.auth.admin.listUsers({ page, perPage: 200 });
+    if (listErr) return { ok: false, error: listErr.message };
+    if (!data.users || data.users.length === 0) break;
+    const match = data.users.find((u) => u.email?.toLowerCase() === trimmed);
+    if (match) {
+      targetUserId = match.id;
+      break;
+    }
+    if (data.users.length < 200) break;
+    page += 1;
+  }
+
+  if (targetUserId) {
+    // Existing user: reset their password to the new temp + mark must-change.
+    const { error: updErr } = await service.auth.admin.updateUserById(targetUserId, {
+      password: tempPassword,
+      user_metadata: {
+        full_name: fullName?.trim() || undefined,
+        must_change_password: true,
+      },
+    });
+    if (updErr) return { ok: false, error: updErr.message };
+  } else {
+    // New user: create with confirmed email so they can sign in immediately.
+    const { data: created, error: createErr } = await service.auth.admin.createUser({
+      email: trimmed,
+      password: tempPassword,
+      email_confirm: true,
+      user_metadata: {
+        full_name: fullName?.trim() || undefined,
+        must_change_password: true,
+      },
+    });
+    if (createErr || !created?.user) {
+      return { ok: false, error: createErr?.message ?? "Failed to create user." };
+    }
+    targetUserId = created.user.id;
+  }
+
+  // Attach to this tenant (or update role if they're already a member).
+  const { data: existing } = await service
+    .from("tenant_members")
+    .select("id, tenant_id, role")
+    .eq("user_id", targetUserId)
+    .maybeSingle();
+
+  if (existing) {
+    if (existing.tenant_id !== tenantId) {
+      return { ok: false, error: "This user already belongs to another tenant." };
+    }
+    await service.from("tenant_members").update({ role }).eq("id", existing.id);
+  } else {
+    const { error: insErr } = await service
+      .from("tenant_members")
+      .insert({ tenant_id: tenantId, user_id: targetUserId, role });
+    if (insErr) return { ok: false, error: insErr.message };
+  }
+
+  revalidatePath("/app/settings/team");
+  return { ok: true, email: trimmed, tempPassword };
+}
+
+/** Cryptographically random 12-char password — avoids look-alike chars 0/O, 1/l/I. */
+function generateTempPassword(): string {
+  const alphabet =
+    "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  const bytes = new Uint32Array(12);
+  crypto.getRandomValues(bytes);
+  let out = "";
+  for (let i = 0; i < 12; i++) {
+    out += alphabet[bytes[i] % alphabet.length];
+    if (i === 3 || i === 7) out += "-";
+  }
+  return out; // e.g. "k7Hj-9MnP-zQ4R"
+}
+
 export async function updateTeamMemberRole(
   memberId: string,
   role: TeamRole

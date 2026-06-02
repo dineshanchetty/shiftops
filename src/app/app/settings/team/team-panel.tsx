@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   inviteTeamMember,
+  createTeamMemberWithPassword,
   updateTeamMemberRole,
   removeTeamMember,
   type TeamMember,
@@ -17,7 +18,14 @@ import {
   CardDescription,
   CardContent,
 } from "@/components/ui/card";
-import { Loader2, Mail, Trash2, Shield, ShieldCheck } from "lucide-react";
+import { Loader2, Mail, Trash2, Shield, ShieldCheck, KeyRound, Copy, Check } from "lucide-react";
+
+type InviteMode = "email" | "manual";
+
+interface IssuedCredentials {
+  email: string;
+  tempPassword: string;
+}
 
 interface TeamPanelProps {
   initialMembers: TeamMember[];
@@ -35,12 +43,26 @@ function formatDate(iso: string | null): string {
 export function TeamPanel({ initialMembers }: TeamPanelProps) {
   const router = useRouter();
   const [members, setMembers] = useState<TeamMember[]>(initialMembers);
+  const [mode, setMode] = useState<InviteMode>("email");
   const [email, setEmail] = useState("");
+  const [fullName, setFullName] = useState("");
   const [inviteRole, setInviteRole] = useState<TeamRole>("manager");
   const [busy, startTransition] = useTransition();
   const [feedback, setFeedback] = useState<
     { type: "ok" | "err"; text: string } | null
   >(null);
+  const [issued, setIssued] = useState<IssuedCredentials | null>(null);
+  const [copiedField, setCopiedField] = useState<"email" | "password" | "both" | null>(null);
+
+  async function copyText(value: string, which: "email" | "password" | "both") {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedField(which);
+      setTimeout(() => setCopiedField((c) => (c === which ? null : c)), 1500);
+    } catch {
+      /* ignore */
+    }
+  }
 
   function refresh() {
     // The action revalidatePath()s, but we're a client component — round-trip
@@ -51,7 +73,24 @@ export function TeamPanel({ initialMembers }: TeamPanelProps) {
   function handleInvite(e: React.FormEvent) {
     e.preventDefault();
     setFeedback(null);
+    setIssued(null);
     startTransition(async () => {
+      if (mode === "manual") {
+        const res = await createTeamMemberWithPassword(email, inviteRole, fullName);
+        if (res.ok) {
+          // Surface the credentials modal — copy them out before dismissing,
+          // they cannot be retrieved later.
+          setIssued({ email: res.email, tempPassword: res.tempPassword });
+          setEmail("");
+          setFullName("");
+          setInviteRole("manager");
+          refresh();
+        } else {
+          setFeedback({ type: "err", text: res.error });
+        }
+        return;
+      }
+
       const res = await inviteTeamMember(email, inviteRole);
       if (res.ok) {
         setFeedback({
@@ -112,14 +151,40 @@ export function TeamPanel({ initialMembers }: TeamPanelProps) {
         <CardHeader>
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent/10 text-accent">
-              <Mail size={20} />
+              {mode === "email" ? <Mail size={20} /> : <KeyRound size={20} />}
             </div>
-            <div>
-              <CardTitle>Invite someone</CardTitle>
+            <div className="flex-1">
+              <CardTitle>Add a team member</CardTitle>
               <CardDescription className="mt-1">
-                They&apos;ll get an email to set their password and land directly in your tenant.
+                {mode === "email"
+                  ? "They'll get an email to set their password and land directly in your tenant."
+                  : "Generate a temporary password to hand over manually. The user will be forced to change it on first sign-in."}
               </CardDescription>
             </div>
+          </div>
+
+          {/* Mode toggle */}
+          <div className="mt-4 inline-flex rounded-lg border border-base-200 p-0.5 bg-base-50 text-xs">
+            <button
+              type="button"
+              onClick={() => setMode("email")}
+              className={`px-3 py-1.5 rounded-md font-medium transition ${
+                mode === "email" ? "bg-white shadow-sm text-base-900" : "text-base-500 hover:text-base-700"
+              }`}
+            >
+              <Mail size={12} className="inline -mt-0.5 mr-1" />
+              Email invite
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("manual")}
+              className={`px-3 py-1.5 rounded-md font-medium transition ${
+                mode === "manual" ? "bg-white shadow-sm text-base-900" : "text-base-500 hover:text-base-700"
+              }`}
+            >
+              <KeyRound size={12} className="inline -mt-0.5 mr-1" />
+              Generate password
+            </button>
           </div>
         </CardHeader>
         <CardContent>
@@ -127,6 +192,21 @@ export function TeamPanel({ initialMembers }: TeamPanelProps) {
             onSubmit={handleInvite}
             className="flex flex-col sm:flex-row gap-3 sm:items-end"
           >
+            {mode === "manual" && (
+              <div className="sm:w-[180px]">
+                <label className="text-xs font-medium text-base-600 block mb-1.5">
+                  Full name
+                </label>
+                <input
+                  type="text"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="Jane Doe"
+                  disabled={busy}
+                  className="w-full h-10 px-3 rounded-lg border border-base-200 bg-white text-sm text-base-900 outline-none focus:border-accent"
+                />
+              </div>
+            )}
             <div className="flex-1">
               <label className="text-xs font-medium text-base-600 block mb-1.5">
                 Email address
@@ -156,8 +236,14 @@ export function TeamPanel({ initialMembers }: TeamPanelProps) {
               </select>
             </div>
             <Button type="submit" disabled={busy || !email}>
-              {busy ? <Loader2 className="animate-spin" size={14} /> : <Mail size={14} />}
-              Send invite
+              {busy ? (
+                <Loader2 className="animate-spin" size={14} />
+              ) : mode === "email" ? (
+                <Mail size={14} />
+              ) : (
+                <KeyRound size={14} />
+              )}
+              {mode === "email" ? "Send invite" : "Create user"}
             </Button>
           </form>
 
@@ -174,6 +260,87 @@ export function TeamPanel({ initialMembers }: TeamPanelProps) {
           )}
         </CardContent>
       </Card>
+
+      {/* Credentials reveal — shown once after manual creation. The owner copies
+          and hands it over. Once dismissed, the password cannot be recovered. */}
+      {issued && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIssued(null);
+          }}
+        >
+          <div className="w-full max-w-md bg-white rounded-xl shadow-xl border border-base-200">
+            <div className="px-5 py-4 border-b border-base-200">
+              <div className="flex items-center gap-2">
+                <KeyRound size={18} className="text-accent" />
+                <h3 className="text-base font-semibold text-base-900">User created</h3>
+              </div>
+              <p className="text-xs text-base-500 mt-1">
+                Copy these details now — for security, the password cannot be retrieved
+                once this dialog is closed. The user must change their password on
+                first sign-in.
+              </p>
+            </div>
+            <div className="px-5 py-4 space-y-3">
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-base-500 block mb-1">
+                  Email
+                </label>
+                <div className="flex gap-2">
+                  <code className="flex-1 px-3 py-2 rounded bg-base-50 text-sm font-mono text-base-900 select-all">
+                    {issued.email}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => copyText(issued.email, "email")}
+                    className="px-3 rounded border border-base-200 bg-white text-xs text-base-600 hover:bg-base-50 inline-flex items-center gap-1"
+                  >
+                    {copiedField === "email" ? <Check size={13} /> : <Copy size={13} />}
+                    {copiedField === "email" ? "Copied" : "Copy"}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold uppercase tracking-wider text-base-500 block mb-1">
+                  Temporary password
+                </label>
+                <div className="flex gap-2">
+                  <code className="flex-1 px-3 py-2 rounded bg-amber-50 border border-amber-200 text-sm font-mono text-amber-900 select-all">
+                    {issued.tempPassword}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => copyText(issued.tempPassword, "password")}
+                    className="px-3 rounded border border-base-200 bg-white text-xs text-base-600 hover:bg-base-50 inline-flex items-center gap-1"
+                  >
+                    {copiedField === "password" ? <Check size={13} /> : <Copy size={13} />}
+                    {copiedField === "password" ? "Copied" : "Copy"}
+                  </button>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  copyText(
+                    `Email: ${issued.email}\nTemporary password: ${issued.tempPassword}\nSign in at: ${typeof window !== "undefined" ? window.location.origin : "https://app.shiftops.co.za"}/login`,
+                    "both"
+                  )
+                }
+                className="w-full px-3 py-2 rounded-lg border border-accent/30 bg-accent/5 text-xs font-medium text-accent hover:bg-accent/10 inline-flex items-center justify-center gap-1"
+              >
+                {copiedField === "both" ? <Check size={13} /> : <Copy size={13} />}
+                {copiedField === "both" ? "Copied entire message" : "Copy both + sign-in link"}
+              </button>
+            </div>
+            <div className="px-5 py-3 border-t border-base-200 flex justify-end">
+              <Button variant="primary" size="sm" onClick={() => setIssued(null)}>
+                Done
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Members list */}
       <Card>
