@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   createTeamMemberWithPassword,
   updateTeamMemberRole,
+  updateTeamMemberBranches,
   removeTeamMember,
   type TeamMember,
   type TeamRole,
@@ -17,15 +18,30 @@ import {
   CardDescription,
   CardContent,
 } from "@/components/ui/card";
-import { Loader2, Trash2, Shield, ShieldCheck, KeyRound, Copy, Check } from "lucide-react";
+import {
+  Loader2,
+  Trash2,
+  Shield,
+  ShieldCheck,
+  KeyRound,
+  Copy,
+  Check,
+  GitBranch,
+} from "lucide-react";
 
 interface IssuedCredentials {
   email: string;
   tempPassword: string;
 }
 
+interface BranchLite {
+  id: string;
+  name: string;
+}
+
 interface TeamPanelProps {
   initialMembers: TeamMember[];
+  branches: BranchLite[];
 }
 
 function formatDate(iso: string | null): string {
@@ -37,9 +53,11 @@ function formatDate(iso: string | null): string {
   });
 }
 
-export function TeamPanel({ initialMembers }: TeamPanelProps) {
+export function TeamPanel({ initialMembers, branches }: TeamPanelProps) {
   const router = useRouter();
   const [members, setMembers] = useState<TeamMember[]>(initialMembers);
+  // ID of the member whose branch-picker popover is open. null = none.
+  const [branchEditorFor, setBranchEditorFor] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [fullName, setFullName] = useState("");
   const [inviteRole, setInviteRole] = useState<TeamRole>("manager");
@@ -105,6 +123,62 @@ export function TeamPanel({ initialMembers }: TeamPanelProps) {
         refresh();
       }
     });
+  }
+
+  function handleToggleBranch(member: TeamMember, branchId: string) {
+    const next = member.branch_ids.includes(branchId)
+      ? member.branch_ids.filter((id) => id !== branchId)
+      : [...member.branch_ids, branchId];
+    // Optimistic
+    setMembers((prev) =>
+      prev.map((m) => (m.id === member.id ? { ...m, branch_ids: next } : m))
+    );
+    setFeedback(null);
+    startTransition(async () => {
+      const res = await updateTeamMemberBranches(member.id, next);
+      if (!res.ok) {
+        setFeedback({ type: "err", text: res.error });
+        // Revert
+        setMembers((prev) =>
+          prev.map((m) =>
+            m.id === member.id ? { ...m, branch_ids: member.branch_ids } : m
+          )
+        );
+      } else {
+        refresh();
+      }
+    });
+  }
+
+  function handleSetAllBranches(member: TeamMember, all: boolean) {
+    const next = all ? branches.map((b) => b.id) : [];
+    setMembers((prev) =>
+      prev.map((m) => (m.id === member.id ? { ...m, branch_ids: next } : m))
+    );
+    setFeedback(null);
+    startTransition(async () => {
+      const res = await updateTeamMemberBranches(member.id, next);
+      if (!res.ok) {
+        setFeedback({ type: "err", text: res.error });
+        setMembers((prev) =>
+          prev.map((m) =>
+            m.id === member.id ? { ...m, branch_ids: member.branch_ids } : m
+          )
+        );
+      } else {
+        refresh();
+      }
+    });
+  }
+
+  function branchLabelFor(m: TeamMember): string {
+    if (m.role === "owner") return "All branches";
+    if (m.branch_ids.length === 0) return "None — no access";
+    if (m.branch_ids.length === branches.length) return "All branches";
+    if (m.branch_ids.length === 1) {
+      return branches.find((b) => b.id === m.branch_ids[0])?.name ?? "1 branch";
+    }
+    return `${m.branch_ids.length} branches`;
   }
 
   function handleRemove(member: TeamMember) {
@@ -308,6 +382,9 @@ export function TeamPanel({ initialMembers }: TeamPanelProps) {
                   <th className="px-4 py-2.5 text-left text-xs uppercase tracking-wide font-semibold text-base-400">
                     Role
                   </th>
+                  <th className="px-4 py-2.5 text-left text-xs uppercase tracking-wide font-semibold text-base-400">
+                    Branch access
+                  </th>
                   <th className="px-4 py-2.5 text-left text-xs uppercase tracking-wide font-semibold text-base-400 hidden md:table-cell">
                     Last sign-in
                   </th>
@@ -357,6 +434,90 @@ export function TeamPanel({ initialMembers }: TeamPanelProps) {
                           <option value="owner">Admin</option>
                         </select>
                       </div>
+                    </td>
+                    {/* Branch access — owners always see all, others get a popover picker */}
+                    <td className="px-4 py-3">
+                      {m.role === "owner" ? (
+                        <span className="inline-flex items-center gap-1 text-xs text-base-500">
+                          <GitBranch size={12} />
+                          All branches
+                        </span>
+                      ) : (
+                        <div className="relative inline-block">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setBranchEditorFor(branchEditorFor === m.id ? null : m.id)
+                            }
+                            disabled={busy}
+                            className={`inline-flex items-center gap-1 px-2 h-8 rounded border text-xs font-medium transition ${
+                              m.branch_ids.length === 0
+                                ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100"
+                                : "border-base-200 bg-white text-base-700 hover:bg-base-50"
+                            }`}
+                          >
+                            <GitBranch size={12} />
+                            {branchLabelFor(m)}
+                          </button>
+                          {branchEditorFor === m.id && (
+                            <>
+                              {/* click-away overlay */}
+                              <button
+                                type="button"
+                                aria-label="Close"
+                                onClick={() => setBranchEditorFor(null)}
+                                className="fixed inset-0 z-30 cursor-default bg-transparent"
+                              />
+                              <div className="absolute z-40 left-0 mt-1 w-64 bg-white rounded-lg border border-base-200 shadow-lg p-2">
+                                <div className="flex items-center justify-between px-2 py-1 mb-1">
+                                  <span className="text-[10px] uppercase tracking-wider font-semibold text-base-500">
+                                    Grant access to
+                                  </span>
+                                  <div className="flex gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSetAllBranches(m, true)}
+                                      className="text-[10px] text-accent hover:underline"
+                                    >
+                                      All
+                                    </button>
+                                    <span className="text-base-300">|</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSetAllBranches(m, false)}
+                                      className="text-[10px] text-base-500 hover:underline"
+                                    >
+                                      None
+                                    </button>
+                                  </div>
+                                </div>
+                                <div className="max-h-56 overflow-y-auto space-y-0.5">
+                                  {branches.map((b) => (
+                                    <label
+                                      key={b.id}
+                                      className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-base-50 cursor-pointer text-sm"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={m.branch_ids.includes(b.id)}
+                                        onChange={() => handleToggleBranch(m, b.id)}
+                                        disabled={busy}
+                                        className="rounded border-base-300"
+                                      />
+                                      <span className="text-base-700">{b.name}</span>
+                                    </label>
+                                  ))}
+                                  {branches.length === 0 && (
+                                    <p className="text-xs text-base-400 px-2 py-2">
+                                      No branches yet — create one under Settings → Branches.
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-base-600 hidden md:table-cell">
                       {formatDate(m.last_sign_in_at)}

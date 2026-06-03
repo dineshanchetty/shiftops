@@ -284,14 +284,22 @@ export async function getUserBranches(): Promise<
 
   const { data: branchIds } = await supabase.rpc("get_user_branch_ids");
 
+  // get_user_branch_ids semantics:
+  //   NULL                    → owner → all branches
+  //   array (incl. empty [])  → non-owner → only these branches
+  // An empty array therefore means "no access" — we must NOT fall through
+  // to "all" for that case.
+  if (Array.isArray(branchIds) && branchIds.length === 0) {
+    return [];
+  }
+
   let query = supabase
     .from("branches")
     .select("id, name")
     .eq("tenant_id", tenantId)
     .order("name");
 
-  // If user has specific branch access, filter
-  if (branchIds && branchIds.length > 0) {
+  if (Array.isArray(branchIds) && branchIds.length > 0) {
     query = query.in("id", branchIds);
   }
 

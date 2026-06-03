@@ -1,4 +1,5 @@
 import { PageShell } from "@/components/layout/page-shell";
+import { createClient } from "@/lib/supabase/server";
 import { listTeamMembers } from "./actions";
 import { TeamPanel } from "./team-panel";
 
@@ -6,6 +7,11 @@ export const dynamic = "force-dynamic";
 
 export default async function TeamPage() {
   const result = await listTeamMembers();
+  const supabase = await createClient();
+  const { data: branches } = await supabase
+    .from("branches")
+    .select("id, name")
+    .order("name");
 
   if (!result.ok) {
     return (
@@ -20,7 +26,7 @@ export default async function TeamPage() {
   return (
     <PageShell
       title="Team"
-      subtitle="Invite people and control their access. Admins have full control; Managers can input data only."
+      subtitle="Invite people and control their access. Admins have full control; Managers can input data only and only see the branches you grant them."
     >
       {result.serviceUnavailable && (
         <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -32,7 +38,10 @@ export default async function TeamPage() {
           look up emails.
         </div>
       )}
-      <TeamPanel initialMembers={result.members} />
+      <TeamPanel
+        initialMembers={result.members}
+        branches={(branches ?? []).map((b) => ({ id: b.id as string, name: b.name as string }))}
+      />
     </PageShell>
   );
 }

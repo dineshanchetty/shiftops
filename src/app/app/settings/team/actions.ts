@@ -441,6 +441,53 @@ export async function updateTeamMemberRole(
   return { ok: true };
 }
 
+/**
+ * Set which branches a team member can access. Owner-only.
+ *
+ * Owners always see every branch regardless of branch_ids (enforced by
+ * is_owner() in SQL and the front-end), so saving branch_ids on an owner
+ * is allowed but has no effect — we still store it in case the user is
+ * later demoted.
+ *
+ * Passing an empty list means "no branches" — a manager will see an
+ * empty branch selector. Pass null / all branches to mean "all".
+ */
+export async function updateTeamMemberBranches(
+  memberId: string,
+  branchIds: string[]
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const guard = await requireOwner();
+  if (!guard.ok) return guard;
+
+  const supabase = await createClient();
+  const { data: tenantId } = await supabase.rpc("get_user_tenant_id");
+  if (!tenantId) return { ok: false, error: "No tenant found" };
+
+  // Sanity-check: every supplied branch belongs to this tenant.
+  if (branchIds.length > 0) {
+    const { data: branches } = await supabase
+      .from("branches")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .in("id", branchIds);
+    const valid = new Set((branches ?? []).map((b) => b.id as string));
+    const bad = branchIds.filter((id) => !valid.has(id));
+    if (bad.length > 0) {
+      return { ok: false, error: "One or more branches don't belong to this tenant." };
+    }
+  }
+
+  const { error } = await supabase
+    .from("tenant_members")
+    .update({ branch_ids: branchIds })
+    .eq("id", memberId)
+    .eq("tenant_id", tenantId);
+
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/app/settings/team");
+  return { ok: true };
+}
+
 export async function removeTeamMember(
   memberId: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {

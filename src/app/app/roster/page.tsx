@@ -112,16 +112,22 @@ export default function RosterPage() {
         }
       }
 
-      // Get branches
-      const { data: branchData } = await supabase
-        .from("branches")
-        .select("*")
-        .order("name");
-      if (branchData) {
-        setBranches(branchData);
-        if (branchData.length > 0 && !filters.branchId) {
-          setFilters((prev) => ({ ...prev, branchId: branchData[0].id }));
-          setBranchName(branchData[0].name);
+      // Get branches — filtered by the user's branch_ids (owners get NULL → all).
+      // get_user_branch_ids() returns NULL for owners and an array for everyone else.
+      const [{ data: branchData }, { data: allowedBranchIds }] = await Promise.all([
+        supabase.from("branches").select("*").order("name"),
+        supabase.rpc("get_user_branch_ids"),
+      ]);
+      const filtered = branchData
+        ? allowedBranchIds == null
+          ? branchData
+          : branchData.filter((b) => (allowedBranchIds as string[]).includes(b.id))
+        : [];
+      if (filtered.length > 0) {
+        setBranches(filtered);
+        if (!filters.branchId) {
+          setFilters((prev) => ({ ...prev, branchId: filtered[0].id }));
+          setBranchName(filtered[0].name);
         }
       }
 
