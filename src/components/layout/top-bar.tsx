@@ -4,6 +4,8 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { ChevronRight, ChevronDown, Menu, Check } from 'lucide-react';
+import { useBranchSelection } from '@/lib/branch-selection';
+import { useAuth } from '@/lib/auth-context';
 
 interface Breadcrumb {
   label: string;
@@ -36,14 +38,32 @@ function getInitials(name: string): string {
 export function TopBar({
   breadcrumbs,
   branches,
-  currentBranchId,
+  currentBranchId: currentBranchIdProp,
   userName = 'User',
   onBranchChange,
   onMenuToggle,
 }: TopBarProps) {
   const [branchDropdownOpen, setBranchDropdownOpen] = useState(false);
 
-  const currentBranch = branches?.find((b) => b.id === currentBranchId);
+  // Context-backed branch selection (localStorage-persisted). Props are kept
+  // for backward compatibility but the context wins when set.
+  const { selectedBranchId, setSelectedBranchId } = useBranchSelection();
+  const { role, branchIds } = useAuth();
+  const isOwner = role === 'owner';
+
+  // Filter to branches the user can actually access (non-owners only).
+  const visibleBranches = (branches ?? []).filter(
+    (b) => isOwner || branchIds.includes(b.id)
+  );
+
+  const activeBranchId = selectedBranchId ?? currentBranchIdProp ?? null;
+  const currentBranch = visibleBranches.find((b) => b.id === activeBranchId);
+
+  function pick(id: string | null) {
+    setSelectedBranchId(id);
+    onBranchChange?.(id ?? '');
+    setBranchDropdownOpen(false);
+  }
 
   return (
     <header className="flex items-center justify-between h-14 px-4 md:px-6 bg-white border-b border-gray-200 shrink-0">
@@ -90,14 +110,14 @@ export function TopBar({
       {/* Right: branch switcher + avatar */}
       <div className="flex items-center gap-3">
         {/* Branch switcher */}
-        {branches && branches.length > 0 && (
+        {visibleBranches.length > 0 && (
           <div className="relative">
             <button
               onClick={() => setBranchDropdownOpen(!branchDropdownOpen)}
               className="flex items-center gap-2 h-8 px-3 rounded-lg border border-gray-200 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
             >
               <span className="truncate max-w-[140px]">
-                {currentBranch?.name ?? 'Select branch'}
+                {currentBranch?.name ?? (activeBranchId ? 'Select branch' : 'All branches')}
               </span>
               <ChevronDown size={14} className="text-gray-400 shrink-0" />
             </button>
@@ -109,22 +129,34 @@ export function TopBar({
                   onClick={() => setBranchDropdownOpen(false)}
                 />
                 <div className="absolute right-0 top-full mt-1 z-20 w-56 rounded-lg border border-gray-200 bg-white shadow-lg py-1">
-                  {branches.map((branch) => (
+                  {/* All branches option — only for users with access to >1 */}
+                  {visibleBranches.length > 1 && (
                     <button
-                      key={branch.id}
-                      onClick={() => {
-                        onBranchChange?.(branch.id);
-                        setBranchDropdownOpen(false);
-                      }}
+                      onClick={() => pick(null)}
                       className={cn(
-                        'flex items-center gap-2 w-full px-3 py-2 text-sm text-left hover:bg-gray-50 transition-colors',
-                        branch.id === currentBranchId && 'text-orange-600 font-medium'
+                        'flex items-center gap-2 w-full px-3 py-2 text-sm text-left hover:bg-gray-50 transition-colors border-b border-gray-100',
+                        activeBranchId === null && 'text-orange-600 font-medium'
                       )}
                     >
-                      {branch.id === currentBranchId && (
+                      {activeBranchId === null && <Check size={14} className="shrink-0" />}
+                      <span className={cn(activeBranchId !== null && 'pl-[22px]', 'truncate')}>
+                        All branches
+                      </span>
+                    </button>
+                  )}
+                  {visibleBranches.map((branch) => (
+                    <button
+                      key={branch.id}
+                      onClick={() => pick(branch.id)}
+                      className={cn(
+                        'flex items-center gap-2 w-full px-3 py-2 text-sm text-left hover:bg-gray-50 transition-colors',
+                        branch.id === activeBranchId && 'text-orange-600 font-medium'
+                      )}
+                    >
+                      {branch.id === activeBranchId && (
                         <Check size={14} className="shrink-0" />
                       )}
-                      <span className={cn(branch.id !== currentBranchId && 'pl-[22px]', 'truncate')}>
+                      <span className={cn(branch.id !== activeBranchId && 'pl-[22px]', 'truncate')}>
                         {branch.name}
                       </span>
                     </button>

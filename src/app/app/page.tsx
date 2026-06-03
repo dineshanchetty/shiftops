@@ -6,6 +6,7 @@ import { StatCard } from '@/components/ui/stat-card';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { createClient } from '@/lib/supabase/client';
+import { useBranchSelection } from '@/lib/branch-selection';
 import { formatCurrency, formatDate, formatTime } from '@/lib/utils';
 import {
   Building2,
@@ -382,6 +383,7 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [openMonths, setOpenMonths] = useState<Set<string>>(new Set());
   const [dashboardTab, setDashboardTab] = useState<DashboardTab>('overview');
+  const { selectedBranchId } = useBranchSelection();
 
   useEffect(() => {
     async function fetchDashboard() {
@@ -401,6 +403,16 @@ export default function DashboardPage() {
 
         if (!member) return;
         const tenantId = member.tenant_id;
+
+        /**
+         * Conditionally add a branch_id filter when the user has picked a
+         * specific branch from the top-bar selector. When the selection is
+         * "All branches" (selectedBranchId === null) queries stay
+         * tenant-wide. Usage: scope(supabase.from('xxx').select('...'))
+         */
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const scope = <T extends { eq: (col: string, v: any) => T }>(qb: T): T =>
+          selectedBranchId ? qb.eq('branch_id', selectedBranchId) : qb;
 
         const today = getToday();
         const { start: monthStart, end: monthEnd } = getMonthRange();
@@ -436,28 +448,28 @@ export default function DashboardPage() {
         ] = await Promise.all([
           supabase.from('branches').select('id, name').eq('tenant_id', tenantId),
 
-          supabase
+          scope(supabase
             .from('daily_cashups')
             .select('id, branch_id, status')
             .eq('tenant_id', tenantId)
             .eq('date', today)
-            .eq('status', 'submitted'),
+            .eq('status', 'submitted')),
 
-          supabase
+          scope(supabase
             .from('daily_cashups')
             .select('gross_turnover')
             .eq('tenant_id', tenantId)
             .gte('date', monthStart)
-            .lte('date', monthEnd),
+            .lte('date', monthEnd)),
 
-          supabase
+          scope(supabase
             .from('daily_cashups')
             .select('gross_turnover')
             .eq('tenant_id', tenantId)
             .gte('date', lastMonthStart)
-            .lte('date', lastMonthEnd),
+            .lte('date', lastMonthEnd)),
 
-          supabase
+          scope(supabase
             .from('roster_entries')
             .select(`
               id, date, shift_start, shift_end, shift_hours, is_off,
@@ -465,29 +477,29 @@ export default function DashboardPage() {
             `)
             .eq('tenant_id', tenantId)
             .eq('date', today)
-            .eq('is_off', false),
+            .eq('is_off', false)),
 
-          supabase
+          scope(supabase
             .from('daily_cashups')
             .select('id, date, gross_turnover, status, branch_id, branches(name)')
             .eq('tenant_id', tenantId)
             .order('date', { ascending: false })
-            .limit(7),
+            .limit(7)),
 
-          supabase
+          scope(supabase
             .from('daily_cashups')
             .select('branch_id, gross_turnover, date, status')
             .eq('tenant_id', tenantId)
             .gte('date', weekStart)
-            .lte('date', weekEnd),
+            .lte('date', weekEnd)),
 
-          supabase
+          scope(supabase
             .from('daily_cashups')
             .select('branch_id, status')
             .eq('tenant_id', tenantId)
-            .eq('date', today),
+            .eq('date', today)),
 
-          supabase
+          scope(supabase
             .from('roster_entries')
             .select(`
               id, date, shift_start, shift_end, shift_hours, is_off,
@@ -497,65 +509,65 @@ export default function DashboardPage() {
             .gt('date', today)
             .lte('date', new Date(Date.now() + 3 * 86400000).toISOString().split('T')[0])
             .order('date')
-            .order('shift_start'),
+            .order('shift_start')),
 
-          supabase
+          scope(supabase
             .from('daily_cashups')
             .select('date, gross_turnover, cash_banked, discounts, delivery_charges, credit_cards, debtors')
             .eq('tenant_id', tenantId)
             .gte('date', days28Ago)
-            .order('date'),
+            .order('date')),
 
-          supabase
+          scope(supabase
             .from('roster_entries')
             .select('id, shift_hours')
             .eq('tenant_id', tenantId)
             .eq('date', tomorrow)
-            .eq('is_off', false),
+            .eq('is_off', false)),
 
-          supabase
+          scope(supabase
             .from('daily_cashups')
             .select('date, gross_turnover')
             .eq('tenant_id', tenantId)
             .gte('date', days7Ago)
-            .order('date'),
+            .order('date')),
 
-          supabase
+          scope(supabase
             .from('daily_cashups')
             .select('gross_turnover')
             .eq('tenant_id', tenantId)
             .gte('date', days14Ago)
-            .lt('date', days7Ago),
+            .lt('date', days7Ago)),
 
-          supabase
+          scope(supabase
             .from('daily_cashups')
             .select('date, gross_turnover, discounts, delivery_charges, credit_cards, debtors, cash_banked')
             .eq('tenant_id', tenantId)
             .gte('date', weekStart)
-            .lte('date', weekEnd),
+            .lte('date', weekEnd)),
 
           // Same calendar month last year — for YoY headline badge
-          supabase
+          scope(supabase
             .from('daily_cashups')
             .select('gross_turnover')
             .eq('tenant_id', tenantId)
             .gte('date', prevYearMonthStart)
-            .lte('date', prevYearMonthEnd),
+            .lte('date', prevYearMonthEnd)),
 
           // Same-DOW last year for the last 7 calendar days (date - 364)
-          supabase
+          scope(supabase
             .from('daily_cashups')
             .select('date, gross_turnover')
             .eq('tenant_id', tenantId)
             .gte('date', sameDowLastYear(getNDaysAgo(7)))
-            .lte('date', sameDowLastYear(today)),
+            .lte('date', sameDowLastYear(today))),
 
           // 13 months range for Year Comparison tab (this-year monthly totals + budget)
-          supabase
+          scope(supabase
             .from('daily_cashups')
             .select('date, gross_turnover, budget_gross, budget_nett')
             .eq('tenant_id', tenantId)
-            .gte('date', yoyRangeStart),
+            .gte('date', yoyRangeStart)),
         ]);
 
         // ─── Process data ────────────────────────────────────────────────────
@@ -793,7 +805,9 @@ export default function DashboardPage() {
     }
 
     fetchDashboard();
-  }, []);
+    // Re-fetch whenever the user picks a different branch in the top-bar selector.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBranchId]);
 
   // ─── Loading state ────────────────────────────────────────────────────────────
 

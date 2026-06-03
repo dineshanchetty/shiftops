@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/layout/sidebar";
 import { BottomTabs } from "@/components/layout/bottom-tabs";
+import { BranchSelectionProvider } from "@/lib/branch-selection";
 
 interface AppShellClientProps {
   tenantName: string;
@@ -21,11 +22,11 @@ export function AppShellClient({
   branches: _branches,
   children,
 }: AppShellClientProps) {
-  void _branches; // Available for future branch switcher integration
+  void _branches; // available to consumers via context now
   const pathname = usePathname();
 
   return (
-    <>
+    <BranchSelectionProvider>
       <Sidebar
         activePath={pathname}
         tenantName={tenantName}
@@ -35,6 +36,6 @@ export function AppShellClient({
       />
       {children}
       <BottomTabs activePath={pathname} />
-    </>
+    </BranchSelectionProvider>
   );
 }
