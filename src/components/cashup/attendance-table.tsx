@@ -1,11 +1,15 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
-import { CheckCheck, Save } from "lucide-react";
+import { useState, useCallback, useMemo, useEffect, useTransition } from "react";
+import { CheckCheck, Save, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import type { RosteredStaffEntry } from "@/app/app/cashup/actions";
+import {
+  loadAttendance,
+  saveAttendance,
+  type RosteredStaffEntry,
+} from "@/app/app/cashup/actions";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -13,6 +17,7 @@ type AttendanceStatus = "pending" | "confirmed" | "absent" | "late";
 
 interface AttendanceRow {
   staff_id: string;
+  roster_entry_id: string;
   first_name: string;
   last_name: string;
   position_name: string | null;
@@ -70,17 +75,40 @@ export function AttendanceTable({
   branchId: _branchId,
   readOnly = false,
 }: AttendanceTableProps) {
-  // TODO: date and branchId will be used when persisting attendance to DB
   void _date;
   void _branchId;
-  // TODO: After running supabase/migrations/005_attendance.sql, persist attendance
-  // records to the attendance table instead of using local state only.
 
-  const [rows, setRows] = useState<AttendanceRow[]>(() =>
-    rosteredStaff.map((s) => {
+  // Build a fresh row from a roster entry, applying any existing attendance.
+  const buildRow = useCallback(
+    (
+      s: RosteredStaffEntry,
+      existing?: {
+        actual_start: string | null;
+        actual_end: string | null;
+        actual_hours: number | null;
+        status: AttendanceStatus;
+      }
+    ): AttendanceRow => {
       const isPaidLeave = s.leave_type === "paid_leave" || s.leave_type === "sick";
+      if (existing) {
+        return {
+          staff_id: s.staff_id,
+          roster_entry_id: s.roster_entry_id,
+          first_name: s.first_name,
+          last_name: s.last_name,
+          position_name: s.position_name,
+          scheduled_start: s.shift_start,
+          scheduled_end: s.shift_end,
+          actual_start: existing.actual_start,
+          actual_end: existing.actual_end,
+          actual_hours: existing.actual_hours,
+          status: existing.status,
+          leave_type: s.leave_type,
+        };
+      }
       return {
         staff_id: s.staff_id,
+        roster_entry_id: s.roster_entry_id,
         first_name: s.first_name,
         last_name: s.last_name,
         position_name: s.position_name,
@@ -88,17 +116,41 @@ export function AttendanceTable({
         scheduled_end: s.shift_end,
         actual_start: s.shift_start,
         actual_end: s.shift_end,
-        // Paid leave has no shift_start/end — credit the rostered shift_hours directly.
         actual_hours: isPaidLeave
           ? s.shift_hours ?? null
           : calcHours(s.shift_start, s.shift_end),
-        status: isPaidLeave ? ("confirmed" as AttendanceStatus) : ("pending" as AttendanceStatus),
+        status: isPaidLeave ? "confirmed" : "pending",
         leave_type: s.leave_type,
       };
-    })
+    },
+    []
   );
 
+  // Initial render uses defaults; the effect below replaces with DB state.
+  const [rows, setRows] = useState<AttendanceRow[]>(() =>
+    rosteredStaff.map((s) => buildRow(s))
+  );
+
+  // Load any saved attendance for these roster entries and overlay it.
+  // Runs whenever the roster set changes (e.g. user navigates to a different
+  // day or branch). Without this, navigating away and back wiped the
+  // confirmed/late/absent state because nothing was ever read from the DB.
+  useEffect(() => {
+    let cancelled = false;
+    const ids = rosteredStaff.map((s) => s.roster_entry_id).filter(Boolean);
+    if (ids.length === 0) return;
+    loadAttendance(ids).then((map) => {
+      if (cancelled) return;
+      setRows(rosteredStaff.map((s) => buildRow(s, map[s.roster_entry_id])));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [rosteredStaff, buildRow]);
+
   const [saved, setSaved] = useState(false);
+  const [saving, startSaving] = useTransition();
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const updateRow = useCallback(
     (staffId: string, updates: Partial<AttendanceRow>) => {
@@ -136,11 +188,25 @@ export function AttendanceTable({
   }, []);
 
   const handleSave = useCallback(() => {
-    // TODO: Persist to attendance table via server action after migration
-    // For now, just show saved feedback
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  }, []);
+    setSaveError(null);
+    startSaving(async () => {
+      const res = await saveAttendance(
+        rows.map((r) => ({
+          roster_entry_id: r.roster_entry_id,
+          actual_start: r.actual_start,
+          actual_end: r.actual_end,
+          actual_hours: r.actual_hours,
+          status: r.status,
+        }))
+      );
+      if (res.ok) {
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
+      } else {
+        setSaveError(res.error);
+      }
+    });
+  }, [rows]);
 
   const pendingCount = useMemo(
     () => rows.filter((r) => r.status === "pending").length,
@@ -189,11 +255,17 @@ export function AttendanceTable({
               variant="secondary"
               size="sm"
               onClick={handleSave}
+              disabled={saving}
             >
-              <Save size={14} />
-              {saved ? "Saved!" : "Save Attendance"}
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              {saving ? "Saving..." : saved ? "Saved!" : "Save Attendance"}
             </Button>
           </div>
+        </div>
+      )}
+      {saveError && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          {saveError}
         </div>
       )}
 

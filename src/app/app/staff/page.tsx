@@ -8,6 +8,7 @@ import { StaffTable, type StaffWithPosition } from "@/components/staff/staff-tab
 import { StaffProfile } from "@/components/staff/staff-profile";
 import { InviteModal } from "@/components/staff/invite-modal";
 import { createClient } from "@/lib/supabase/client";
+import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
 import { UserPlus, Upload, Users } from "lucide-react";
 import type { Position, SubPosition, Branch } from "@/lib/types";
@@ -34,6 +35,8 @@ export default function StaffPage() {
   // Panels
   const [selectedStaff, setSelectedStaff] = useState<StaffWithPosition | null>(null);
   const [showInvite, setShowInvite] = useState(false);
+  const { hasPermission } = useAuth();
+  const canAddStaff = hasPermission("staff.edit");
 
   const fetchData = useCallback(async () => {
     const supabase = createClient();
@@ -128,20 +131,22 @@ export default function StaffPage() {
       <PageShell
         title="Staff"
         action={
-          <div className="flex gap-2">
-            <Button variant="secondary" size="sm">
-              <Upload size={14} />
-              Import CSV
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => setShowInvite(true)}
-            >
-              <UserPlus size={14} />
-              Invite Staff
-            </Button>
-          </div>
+          canAddStaff ? (
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm">
+                <Upload size={14} />
+                Import CSV
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => setShowInvite(true)}
+              >
+                <UserPlus size={14} />
+                Invite Staff
+              </Button>
+            </div>
+          ) : undefined
         }
       >
         {/* Filter bar */}
@@ -197,16 +202,20 @@ export default function StaffPage() {
               No staff yet
             </h3>
             <p className="text-sm text-base-400 mb-4 max-w-sm">
-              Add your team members to start building rosters and managing shifts.
+              {canAddStaff
+                ? "Add your team members to start building rosters and managing shifts."
+                : "No staff have been added yet. Ask an Admin to invite the team."}
             </p>
-            <Button
-              variant="primary"
-              size="md"
-              onClick={() => setShowInvite(true)}
-            >
-              <UserPlus size={16} />
-              Invite Staff
-            </Button>
+            {canAddStaff && (
+              <Button
+                variant="primary"
+                size="md"
+                onClick={() => setShowInvite(true)}
+              >
+                <UserPlus size={16} />
+                Invite Staff
+              </Button>
+            )}
           </div>
         ) : (
           /* Filter returned no results */

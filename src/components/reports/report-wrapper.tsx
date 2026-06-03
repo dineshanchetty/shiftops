@@ -12,7 +12,14 @@ import { useAuth } from "@/lib/auth-context";
 // ─── Date preset helpers ───────────────────────────────────────────────────
 
 function toISODate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  // Use local date parts — NOT toISOString().slice(0,10), which converts to
+  // UTC and rolls the date back / forward depending on timezone. In SAST
+  // (+02:00), local midnight on 1 Jun became "2026-05-31" via UTC and the
+  // "This Month" preset rendered as 31/05 → 31/05.
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function getPresetRange(preset: string): { from: string; to: string } {

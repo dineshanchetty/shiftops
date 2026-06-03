@@ -31,6 +31,8 @@ export interface DriverFromRoster {
 
 export interface RosteredStaffEntry {
   staff_id: string;
+  /** PK of the underlying roster_entries row — required to upsert attendance. */
+  roster_entry_id: string;
   first_name: string;
   last_name: string;
   position_name: string | null;
@@ -537,6 +539,7 @@ export async function getRosteredStaff(
 
     result.push({
       staff_id: staff.id,
+      roster_entry_id: entry.id as string,
       first_name: staff.first_name,
       last_name: staff.last_name,
       position_name: staff.position?.name ?? null,
@@ -549,6 +552,82 @@ export async function getRosteredStaff(
   }
 
   return result;
+}
+
+// ─── Attendance ───────────────────────────────────────────────────────────────
+
+export type AttendanceStatus = "pending" | "confirmed" | "absent" | "late";
+
+export interface AttendanceRecord {
+  roster_entry_id: string;
+  actual_start: string | null;
+  actual_end: string | null;
+  actual_hours: number | null;
+  status: AttendanceStatus;
+}
+
+/**
+ * Load existing attendance rows for a set of roster_entry_ids.
+ * Returned as a map keyed by roster_entry_id for easy overlay onto the
+ * rostered-staff list on the cashup form.
+ */
+export async function loadAttendance(
+  rosterEntryIds: string[]
+): Promise<Record<string, AttendanceRecord>> {
+  if (rosterEntryIds.length === 0) return {};
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("attendance")
+    .select("roster_entry_id, actual_start, actual_end, actual_hours, status")
+    .in("roster_entry_id", rosterEntryIds);
+  const map: Record<string, AttendanceRecord> = {};
+  for (const r of data ?? []) {
+    map[r.roster_entry_id as string] = {
+      roster_entry_id: r.roster_entry_id as string,
+      actual_start: (r.actual_start as string | null) ?? null,
+      actual_end: (r.actual_end as string | null) ?? null,
+      actual_hours:
+        r.actual_hours == null ? null : Number(r.actual_hours),
+      status: (r.status as AttendanceStatus) ?? "pending",
+    };
+  }
+  return map;
+}
+
+/**
+ * Upsert attendance for one or more roster entries. The attendance table has
+ * UNIQUE(roster_entry_id) so we upsert on that conflict target.
+ */
+export async function saveAttendance(
+  records: AttendanceRecord[]
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (records.length === 0) return { ok: true };
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Unauthorized" };
+
+  const { data: tenantId } = await supabase.rpc("get_user_tenant_id");
+  if (!tenantId) return { ok: false, error: "No tenant found" };
+
+  const rows = records.map((r) => ({
+    tenant_id: tenantId,
+    roster_entry_id: r.roster_entry_id,
+    actual_start: r.actual_start,
+    actual_end: r.actual_end,
+    actual_hours: r.actual_hours,
+    status: r.status,
+    confirmed_by: r.status === "confirmed" ? user.id : null,
+    confirmed_at: r.status === "confirmed" ? new Date().toISOString() : null,
+  }));
+
+  const { error } = await supabase
+    .from("attendance")
+    .upsert(rows, { onConflict: "roster_entry_id" });
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
 }
 
 // ─── Get cashup history for branch ───────────────────────────────────────────
