@@ -195,7 +195,9 @@ export default function TurnoverBudgetPage() {
         }
       }
 
-      // For days with no franchisor prev_yr_to value, fall back to actual gross_turnover one year back.
+      // For days with no franchisor prev_yr_to value, fall back to actual
+      // gross_turnover one year back — converted to Nett (÷ 1.15) so the
+      // Prev Yr T/O column stays consistent with the Nett franchisor figure.
       const prevYear = year - 1;
       const prevFrom = `${prevYear}-${String(month + 1).padStart(2, "0")}-01`;
       const prevLast = new Date(prevYear, month + 1, 0).getDate();
@@ -209,7 +211,8 @@ export default function TurnoverBudgetPage() {
       for (const c of prevCashups ?? []) {
         const day = new Date(c.date + "T00:00:00").getDate();
         if (haveDates.has(day)) continue; // franchisor value already present
-        map.set(day, (map.get(day) ?? 0) + (c.gross_turnover ?? 0));
+        const nett = (c.gross_turnover ?? 0) / 1.15;
+        map.set(day, (map.get(day) ?? 0) + nett);
       }
       return map;
     },
@@ -446,14 +449,21 @@ export default function TurnoverBudgetPage() {
 
       const cashups = cashupsResult.data;
 
-      // Build actual turnover map + per-date imported budget (sum across branches)
+      // Build actual turnover map + per-date imported budget (sum across branches).
+      // daily_cashups.gross_turnover is GROSS (VAT-inclusive); this report's
+      // "Actual Nett" column expects Nett (ex-VAT). Convert at 15% VAT.
+      // The Aura cashup printout confirms this — e.g. Gross 4,960.90 / VAT
+      // 647.07 ⇒ Nett 4,313.83 (= 4,960.90 / 1.15).
+      const VAT_DIVISOR = 1.15;
       const actualByDate = new Map<string, number>();
       const importedBudgetByDate = new Map<string, number>();
       let totalWages = 0;
       if (cashups) {
         for (const c of cashups as DailyCashup[]) {
+          const grossTurnover = c.gross_turnover ?? 0;
+          const nettTurnover = grossTurnover / VAT_DIVISOR;
           const existing = actualByDate.get(c.date) ?? 0;
-          actualByDate.set(c.date, existing + (c.gross_turnover ?? 0));
+          actualByDate.set(c.date, existing + nettTurnover);
           // Pull imported budget_nett if present (added by historic import migration 013)
           const cb = (c as unknown as { budget_nett?: number | null }).budget_nett;
           if (cb != null) {
