@@ -968,6 +968,9 @@ export type Database = {
       get_user_branch_ids: { Args: Record<string, never>; Returns: string[] }
       get_user_role: { Args: Record<string, never>; Returns: string }
       get_user_tenant_id: { Args: Record<string, never>; Returns: string }
+      is_owner: { Args: Record<string, never>; Returns: boolean }
+      has_permission: { Args: { p_key: string }; Returns: boolean }
+      can_access_branch: { Args: { p_branch_id: string }; Returns: boolean }
       setup_tenant: {
         Args: {
           p_branch_address?: string

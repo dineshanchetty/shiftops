@@ -49,8 +49,8 @@ function dayBefore(dateStr: string): string {
 
 export function RateHistory({ staffId, tenantId }: RateHistoryProps) {
   const supabase = createClient();
-  const { role } = useAuth();
-  const isOwner = role === "owner";
+  const { hasPermission } = useAuth();
+  const canEditRate = hasPermission("staff.rate.edit");
   const [rates, setRates] = useState<StaffRate[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -140,7 +140,7 @@ export function RateHistory({ staffId, tenantId }: RateHistoryProps) {
     <div>
       <div className="flex items-baseline justify-between mb-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-base-500">Hourly Rate</h3>
-        {!showAdd && isOwner && (
+        {!showAdd && canEditRate && (
           <button
             onClick={() => setShowAdd(true)}
             className="text-xs font-medium text-accent hover:underline"
@@ -148,7 +148,7 @@ export function RateHistory({ staffId, tenantId }: RateHistoryProps) {
             <Plus size={12} className="inline" /> Update rate
           </button>
         )}
-        {!showAdd && !isOwner && (
+        {!showAdd && !canEditRate && (
           <span className="inline-flex items-center gap-1 text-[11px] text-base-400">
             <Lock size={11} /> Admin only
           </span>

@@ -36,8 +36,8 @@ import { Lock } from "lucide-react";
 type StatusBanner = "aura" | "manual" | "submitted" | null;
 
 export default function CashupPage() {
-  const { role } = useAuth();
-  const isOwner = role === "owner";
+  const { hasPermission } = useAuth();
+  const canUnlock = hasPermission("cashup.unlock");
 
   // ─── Selection state ────────────────────────────────────────────────
   const [branches, setBranches] = useState<{ id: string; name: string }[]>(
@@ -345,15 +345,15 @@ export default function CashupPage() {
       {loaded && status === "submitted" && (
         <div className="flex items-center justify-between rounded-lg bg-gray-100 border border-gray-200 px-4 py-3 mb-6">
           <div className="flex items-center gap-2">
-            {isOwner ? (
+            {canUnlock ? (
               <CheckCircle2 size={18} className="text-green-600 shrink-0" />
             ) : (
               <Lock size={18} className="text-gray-600 shrink-0" />
             )}
             <span className="text-sm text-gray-700 font-medium">
-              {isOwner
+              {canUnlock
                 ? "Already submitted"
-                : "Locked — submitted cashup. Contact an Admin to unlock."}
+                : "Locked — submitted cashup. Contact someone with unlock permission."}
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -364,8 +364,8 @@ export default function CashupPage() {
             >
               Back to List
             </Button>
-            {/* Only Admins (owners) can re-open a posted cashup. */}
-            {isOwner && (
+            {/* Visible to anyone with the cashup.unlock permission. */}
+            {canUnlock && (
               <Button
                 variant="ghost"
                 size="sm"

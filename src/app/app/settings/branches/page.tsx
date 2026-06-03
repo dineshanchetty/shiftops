@@ -7,6 +7,7 @@ import { PageShell } from "@/components/layout/page-shell";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Plus, ChevronRight } from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
 import type { Branch, Brand } from "@/lib/types";
 
 type BranchWithBrand = Branch & { brands: Pick<Brand, "name"> | null };
@@ -16,14 +17,10 @@ export default function BranchesPage() {
   const supabase = createClient();
   const [branches, setBranches] = useState<BranchWithBrand[]>([]);
   const [loading, setLoading] = useState(true);
-  const [userRole, setUserRole] = useState<string | null>(null);
+  const { hasPermission } = useAuth();
 
   useEffect(() => {
     async function load() {
-      // Get user role
-      const { data: roleData } = await supabase.rpc("get_user_role");
-      setUserRole(roleData ?? null);
-
       // Get tenant id
       const { data: tenantId } = await supabase.rpc("get_user_tenant_id");
       if (!tenantId) return;
@@ -40,14 +37,16 @@ export default function BranchesPage() {
     load();
   }, [supabase]);
 
-  const isOwner = userRole === "owner";
+  // Was owner-only; now anyone with settings.branches can manage.
+  // Owners always pass via the SQL has_permission() short-circuit.
+  const canEdit = hasPermission("settings.branches");
 
   return (
     <PageShell
       title="Branches"
       subtitle="Manage your branch locations and Aura POS connections."
       action={
-        isOwner ? (
+        canEdit ? (
           <Button size="sm" onClick={() => router.push("/app/settings/branches/new")}>
             <Plus size={16} />
             Add Branch

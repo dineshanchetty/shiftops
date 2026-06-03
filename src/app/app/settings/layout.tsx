@@ -21,8 +21,12 @@ export default async function SettingsLayout({
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const { data: role } = await supabase.rpc("get_user_role");
-  if (role !== "owner") {
+  // Gated by the settings.access permission — owners always pass, and any
+  // custom role granted this permission also gets in.
+  const { data: allowed } = await supabase.rpc("has_permission", {
+    p_key: "settings.access",
+  });
+  if (allowed !== true) {
     redirect("/app?settings=admin-only");
   }
 

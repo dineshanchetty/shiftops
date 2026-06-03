@@ -23,6 +23,10 @@ export async function getCurrentRole(): Promise<UserRole | null> {
 /**
  * Returns `{ ok: true }` if the caller is an owner, else `{ ok: false, error }`.
  * Pattern: `const guard = await requireOwner(); if (!guard.ok) return guard;`
+ *
+ * Kept for cases that genuinely need full admin (settings layout root guard,
+ * role management, manual user creation). For everything else prefer
+ * requirePermission(key) so custom roles can grant access.
  */
 export async function requireOwner(): Promise<
   { ok: true } | { ok: false; error: string }
@@ -35,4 +39,31 @@ export async function requireOwner(): Promise<
     };
   }
   return { ok: true };
+}
+
+/**
+ * Returns `{ ok: true }` if the caller is an owner OR has the given permission
+ * via their role. Backed by the SQL `has_permission(text)` function.
+ *
+ * Pattern:
+ *   const guard = await requirePermission("cashup.unlock");
+ *   if (!guard.ok) return guard;
+ */
+export async function requirePermission(
+  permissionKey: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const supabase = await createClient();
+  const { data } = await supabase.rpc("has_permission", { p_key: permissionKey });
+  if (data === true) return { ok: true };
+  return {
+    ok: false,
+    error: `Your role doesn't have the "${permissionKey}" permission.`,
+  };
+}
+
+/** Check a permission without throwing. Returns false on error/unauth. */
+export async function checkPermission(permissionKey: string): Promise<boolean> {
+  const supabase = await createClient();
+  const { data } = await supabase.rpc("has_permission", { p_key: permissionKey });
+  return data === true;
 }

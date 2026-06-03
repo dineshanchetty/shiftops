@@ -1,7 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { requireOwner, getCurrentRole } from "@/lib/permissions";
+import { requirePermission, checkPermission } from "@/lib/permissions";
 import type {
   DailyCashup,
   CashupOnlinePayment,
@@ -360,12 +360,13 @@ export async function saveCashup(input: SaveCashupInput) {
       .eq("id", cashupId)
       .single();
     if (existing?.status === "submitted") {
-      const role = await getCurrentRole();
-      if (role !== "owner") {
+      // Only users with cashup.unlock permission can write to a posted cashup.
+      const canUnlock = await checkPermission("cashup.unlock");
+      if (!canUnlock) {
         return {
           success: false,
           error:
-            "This cashup is locked. Ask an Admin to unlock it before making changes.",
+            "This cashup is locked. Ask someone with unlock permission to re-open it before making changes.",
         };
       }
     }
@@ -597,8 +598,8 @@ export async function unlockCashup(cashupId: string) {
   } = await supabase.auth.getUser();
   if (!user) return { success: false, error: "Unauthorized" };
 
-  // Only Admin (owner) can re-open a posted cashup.
-  const guard = await requireOwner();
+  // Anyone with the cashup.unlock permission can re-open a posted cashup.
+  const guard = await requirePermission("cashup.unlock");
   if (!guard.ok) return { success: false, error: guard.error };
 
   const { error } = await supabase

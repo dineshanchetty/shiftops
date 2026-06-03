@@ -28,39 +28,38 @@ type NavItem = {
   label: string;
   href: string;
   icon: typeof LayoutDashboard;
-  /** If true, only shown to owners (Admin). */
-  ownerOnly?: boolean;
+  /** Permission key required to see this item. Omit for "everyone". */
+  permission?: string;
 };
-type NavGroup = { label: string; items: NavItem[]; ownerOnly?: boolean };
+type NavGroup = { label: string; items: NavItem[] };
 
 const navGroups: NavGroup[] = [
   {
     label: 'Operations',
     items: [
-      { label: 'Dashboard', href: '/app', icon: LayoutDashboard },
-      { label: 'Roster', href: '/app/roster', icon: Calendar },
-      { label: 'Managers Roster', href: '/app/managers-roster', icon: UserCog },
-      { label: 'Cashup', href: '/app/cashup', icon: Receipt },
-      { label: 'Aura Upload', href: '/app/aura-upload', icon: Upload },
+      { label: 'Dashboard',        href: '/app',                 icon: LayoutDashboard },
+      { label: 'Roster',           href: '/app/roster',          icon: Calendar,  permission: 'roster.view' },
+      { label: 'Managers Roster',  href: '/app/managers-roster', icon: UserCog,   permission: 'roster.view' },
+      { label: 'Cashup',           href: '/app/cashup',          icon: Receipt,   permission: 'cashup.view' },
+      { label: 'Aura Upload',      href: '/app/aura-upload',     icon: Upload,    permission: 'cashup.edit' },
     ],
   },
   {
     label: 'Staff',
     items: [
-      { label: 'Staff', href: '/app/staff', icon: Users },
+      { label: 'Staff', href: '/app/staff', icon: Users, permission: 'staff.view' },
     ],
   },
   {
     label: 'Finance',
     items: [
-      { label: 'Reports', href: '/app/reports', icon: BarChart3 },
+      { label: 'Reports', href: '/app/reports', icon: BarChart3, permission: 'reports.view' },
     ],
   },
   {
     label: 'System',
-    ownerOnly: true,
     items: [
-      { label: 'Settings', href: '/app/settings', icon: Settings, ownerOnly: true },
+      { label: 'Settings', href: '/app/settings', icon: Settings, permission: 'settings.access' },
     ],
   },
 ];
@@ -82,14 +81,12 @@ export function Sidebar({
   tenantLogoUrl,
 }: SidebarProps) {
   const router = useRouter();
-  const { role } = useAuth();
-  const isOwner = role === 'owner';
+  const { hasPermission } = useAuth();
 
   const visibleGroups = navGroups
-    .filter((g) => !g.ownerOnly || isOwner)
     .map((g) => ({
       ...g,
-      items: g.items.filter((i) => !i.ownerOnly || isOwner),
+      items: g.items.filter((i) => !i.permission || hasPermission(i.permission)),
     }))
     .filter((g) => g.items.length > 0);
 
