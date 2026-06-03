@@ -1,17 +1,25 @@
 import { PageShell } from "@/components/layout/page-shell";
 import { createClient } from "@/lib/supabase/server";
 import { listTeamMembers } from "./actions";
+import { listRoles } from "../roles/actions";
 import { TeamPanel } from "./team-panel";
 
 export const dynamic = "force-dynamic";
 
 export default async function TeamPage() {
-  const result = await listTeamMembers();
+  const [result, rolesResult] = await Promise.all([
+    listTeamMembers(),
+    listRoles(),
+  ]);
   const supabase = await createClient();
   const { data: branches } = await supabase
     .from("branches")
     .select("id, name")
     .order("name");
+
+  const availableRoles = rolesResult.ok
+    ? rolesResult.roles.map((r) => ({ id: r.id, name: r.name, is_system: r.is_system }))
+    : [];
 
   if (!result.ok) {
     return (
@@ -41,6 +49,7 @@ export default async function TeamPage() {
       <TeamPanel
         initialMembers={result.members}
         branches={(branches ?? []).map((b) => ({ id: b.id as string, name: b.name as string }))}
+        availableRoles={availableRoles}
       />
     </PageShell>
   );

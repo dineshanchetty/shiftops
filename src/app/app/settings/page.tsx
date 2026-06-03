@@ -9,7 +9,7 @@ import {
   CardDescription,
   CardContent,
 } from "@/components/ui/card";
-import { GitBranch, Link2, UserCog, CreditCard, ArrowRight, Tag, Users } from "lucide-react";
+import { GitBranch, Link2, UserCog, CreditCard, ArrowRight, Tag, Users, ShieldCheck } from "lucide-react";
 
 const settingsCards = [
   {
@@ -44,6 +44,13 @@ const settingsCards = [
       "Invite people, change Admin / Manager roles, and remove users.",
     href: "/app/settings/team",
     icon: Users,
+  },
+  {
+    title: "Roles & Permissions",
+    description:
+      "Define custom roles with fine-grained permissions (e.g. Cashier, Supervisor).",
+    href: "/app/settings/roles",
+    icon: ShieldCheck,
   },
   {
     title: "Account Settings",

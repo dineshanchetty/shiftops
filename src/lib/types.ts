@@ -841,12 +841,52 @@ export type Database = {
         }
         Relationships: []
       }
+      permissions: {
+        Row: { key: string; description: string; category: string }
+        Insert: { key: string; description: string; category: string }
+        Update: { key?: string; description?: string; category?: string }
+        Relationships: []
+      }
+      roles: {
+        Row: {
+          id: string
+          tenant_id: string
+          name: string
+          description: string | null
+          is_system: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          tenant_id: string
+          name: string
+          description?: string | null
+          is_system?: boolean
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          tenant_id?: string
+          name?: string
+          description?: string | null
+          is_system?: boolean
+          created_at?: string
+        }
+        Relationships: []
+      }
+      role_permissions: {
+        Row: { role_id: string; permission_key: string }
+        Insert: { role_id: string; permission_key: string }
+        Update: { role_id?: string; permission_key?: string }
+        Relationships: []
+      }
       tenant_members: {
         Row: {
           branch_ids: string[] | null
           created_at: string | null
           id: string
           role: string
+          role_id: string | null
           tenant_id: string
           user_id: string
         }
@@ -855,6 +895,7 @@ export type Database = {
           created_at?: string | null
           id?: string
           role: string
+          role_id?: string | null
           tenant_id: string
           user_id: string
         }
@@ -863,6 +904,7 @@ export type Database = {
           created_at?: string | null
           id?: string
           role?: string
+          role_id?: string | null
           tenant_id?: string
           user_id?: string
         }

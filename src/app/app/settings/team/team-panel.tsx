@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   createTeamMemberWithPassword,
   updateTeamMemberRole,
+  updateTeamMemberRoleId,
   updateTeamMemberBranches,
   removeTeamMember,
   type TeamMember,
@@ -39,9 +40,16 @@ interface BranchLite {
   name: string;
 }
 
+interface RoleLite {
+  id: string;
+  name: string;
+  is_system: boolean;
+}
+
 interface TeamPanelProps {
   initialMembers: TeamMember[];
   branches: BranchLite[];
+  availableRoles: RoleLite[];
 }
 
 function formatDate(iso: string | null): string {
@@ -53,7 +61,7 @@ function formatDate(iso: string | null): string {
   });
 }
 
-export function TeamPanel({ initialMembers, branches }: TeamPanelProps) {
+export function TeamPanel({ initialMembers, branches, availableRoles }: TeamPanelProps) {
   const router = useRouter();
   const [members, setMembers] = useState<TeamMember[]>(initialMembers);
   // ID of the member whose branch-picker popover is open. null = none.
@@ -107,7 +115,6 @@ export function TeamPanel({ initialMembers, branches }: TeamPanelProps) {
   function handleRoleChange(member: TeamMember, role: TeamRole) {
     if (role === member.role) return;
     setFeedback(null);
-    // Optimistic
     setMembers((prev) =>
       prev.map((m) => (m.id === member.id ? { ...m, role } : m))
     );
@@ -115,9 +122,45 @@ export function TeamPanel({ initialMembers, branches }: TeamPanelProps) {
       const res = await updateTeamMemberRole(member.id, role);
       if (!res.ok) {
         setFeedback({ type: "err", text: res.error });
-        // Revert
         setMembers((prev) =>
           prev.map((m) => (m.id === member.id ? { ...m, role: member.role } : m))
+        );
+      } else {
+        refresh();
+      }
+    });
+  }
+
+  function handleRoleIdChange(member: TeamMember, roleId: string) {
+    if (roleId === member.role_id) return;
+    setFeedback(null);
+    const role = availableRoles.find((r) => r.id === roleId);
+    if (!role) return;
+    // Optimistic: legacy role text = 'owner' iff Admin, else 'manager'.
+    const legacy: TeamRole =
+      role.is_system && role.name === "Admin" ? "owner" : "manager";
+    setMembers((prev) =>
+      prev.map((m) =>
+        m.id === member.id
+          ? { ...m, role_id: roleId, role_name: role.name, role: legacy }
+          : m
+      )
+    );
+    startTransition(async () => {
+      const res = await updateTeamMemberRoleId(member.id, roleId);
+      if (!res.ok) {
+        setFeedback({ type: "err", text: res.error });
+        setMembers((prev) =>
+          prev.map((m) =>
+            m.id === member.id
+              ? {
+                  ...m,
+                  role_id: member.role_id,
+                  role_name: member.role_name,
+                  role: member.role,
+                }
+              : m
+          )
         );
       } else {
         refresh();
@@ -422,17 +465,35 @@ export function TeamPanel({ initialMembers, branches }: TeamPanelProps) {
                         ) : (
                           <Shield size={14} className="text-base-400" />
                         )}
-                        <select
-                          value={m.role}
-                          onChange={(e) =>
-                            handleRoleChange(m, e.target.value as TeamRole)
-                          }
-                          disabled={busy}
-                          className="h-8 px-2 rounded border border-base-200 bg-white text-xs text-base-900 outline-none focus:border-accent"
-                        >
-                          <option value="manager">Manager</option>
-                          <option value="owner">Admin</option>
-                        </select>
+                        {availableRoles.length > 0 ? (
+                          <select
+                            value={m.role_id ?? ""}
+                            onChange={(e) => handleRoleIdChange(m, e.target.value)}
+                            disabled={busy}
+                            className="h-8 px-2 rounded border border-base-200 bg-white text-xs text-base-900 outline-none focus:border-accent min-w-[120px]"
+                          >
+                            {!m.role_id && <option value="">— unassigned —</option>}
+                            {availableRoles.map((r) => (
+                              <option key={r.id} value={r.id}>
+                                {r.name}
+                                {r.is_system ? "" : " (custom)"}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          // Fallback if roles haven't loaded — keep the legacy text dropdown
+                          <select
+                            value={m.role}
+                            onChange={(e) =>
+                              handleRoleChange(m, e.target.value as TeamRole)
+                            }
+                            disabled={busy}
+                            className="h-8 px-2 rounded border border-base-200 bg-white text-xs text-base-900 outline-none focus:border-accent"
+                          >
+                            <option value="manager">Manager</option>
+                            <option value="owner">Admin</option>
+                          </select>
+                        )}
                       </div>
                     </td>
                     {/* Branch access — owners always see all, others get a popover picker */}

@@ -12,6 +12,8 @@ export interface TeamMember {
   user_id: string;
   email: string;
   role: TeamRole;
+  role_id: string | null;
+  role_name: string | null; // resolved from the roles table
   branch_ids: string[];
   is_self: boolean;
   created_at: string | null;
@@ -46,7 +48,7 @@ export async function listTeamMembers(): Promise<
 
   const { data: members, error } = await supabase
     .from("tenant_members")
-    .select("id, user_id, role, branch_ids, created_at")
+    .select("id, user_id, role, role_id, branch_ids, created_at, roles(name)")
     .eq("tenant_id", tenantId)
     .order("created_at", { ascending: true });
 
@@ -90,11 +92,18 @@ export async function listTeamMembers(): Promise<
 
   const result: TeamMember[] = (members ?? []).map((m) => {
     const u = byUserId.get(m.user_id);
+    // roles is an embedded relation — Supabase types it as object | array; normalise.
+    const roleObj = (m as unknown as { roles?: { name?: string } | { name?: string }[] | null }).roles;
+    const roleName = Array.isArray(roleObj)
+      ? roleObj[0]?.name ?? null
+      : roleObj?.name ?? null;
     return {
       id: m.id,
       user_id: m.user_id,
       email: u?.email ?? (m.user_id === user.id ? user.email ?? "(you)" : "(email unavailable)"),
       role: m.role as TeamRole,
+      role_id: (m as unknown as { role_id: string | null }).role_id ?? null,
+      role_name: roleName,
       branch_ids: m.branch_ids ?? [],
       is_self: m.user_id === user.id,
       created_at: m.created_at,
@@ -434,6 +443,78 @@ export async function updateTeamMemberRole(
   const { error } = await supabase
     .from("tenant_members")
     .update({ role })
+    .eq("id", memberId);
+  if (error) return { ok: false, error: error.message };
+
+  revalidatePath("/app/settings/team");
+  return { ok: true };
+}
+
+/**
+ * Assign a member to any role in the tenant by role_id (system or custom).
+ * Keeps the legacy `role` text in sync — Admin → "owner", anything else
+ * → "manager" — so all existing `role === 'owner'` checks still work
+ * until Drop 2b replaces them with hasPermission() calls.
+ */
+export async function updateTeamMemberRoleId(
+  memberId: string,
+  roleId: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const guard = await requireOwner();
+  if (!guard.ok) return guard;
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { ok: false, error: "Unauthorized" };
+
+  const { data: tenantId } = await supabase.rpc("get_user_tenant_id");
+  if (!tenantId) return { ok: false, error: "No tenant found" };
+
+  // Resolve the target role (and confirm it belongs to this tenant).
+  const { data: targetRole } = await supabase
+    .from("roles")
+    .select("id, name, is_system")
+    .eq("id", roleId)
+    .eq("tenant_id", tenantId)
+    .single();
+  if (!targetRole) return { ok: false, error: "Role not found" };
+
+  // Resolve the existing member.
+  const { data: targetMember } = await supabase
+    .from("tenant_members")
+    .select("id, user_id, role")
+    .eq("id", memberId)
+    .eq("tenant_id", tenantId)
+    .single();
+  if (!targetMember) return { ok: false, error: "Member not found" };
+
+  const goingToAdmin = targetRole.is_system && targetRole.name === "Admin";
+  const newLegacyRole = goingToAdmin ? "owner" : "manager";
+
+  // Block last-Admin demote on self.
+  if (
+    targetMember.user_id === user.id &&
+    targetMember.role === "owner" &&
+    newLegacyRole !== "owner"
+  ) {
+    const { count } = await supabase
+      .from("tenant_members")
+      .select("id", { count: "exact", head: true })
+      .eq("tenant_id", tenantId)
+      .eq("role", "owner");
+    if ((count ?? 0) <= 1) {
+      return {
+        ok: false,
+        error: "You're the last Admin — promote someone else first.",
+      };
+    }
+  }
+
+  const { error } = await supabase
+    .from("tenant_members")
+    .update({ role_id: roleId, role: newLegacyRole })
     .eq("id", memberId);
   if (error) return { ok: false, error: error.message };
 
