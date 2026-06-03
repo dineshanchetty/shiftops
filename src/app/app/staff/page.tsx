@@ -35,8 +35,9 @@ export default function StaffPage() {
   // Panels
   const [selectedStaff, setSelectedStaff] = useState<StaffWithPosition | null>(null);
   const [showInvite, setShowInvite] = useState(false);
-  const { hasPermission } = useAuth();
+  const { hasPermission, role, branchIds: userBranchIds } = useAuth();
   const canAddStaff = hasPermission("staff.edit");
+  const isOwner = role === "owner";
 
   const fetchData = useCallback(async () => {
     const supabase = createClient();
@@ -46,20 +47,64 @@ export default function StaffPage() {
     if (!tid) return;
     setTenantId(tid);
 
-    // Fetch all data in parallel
+    // Fetch all data in parallel.
+    // For non-owners, restrict staff + branches to the user's accessible branches
+    // (RLS would also block at the API level, but filtering here means an empty
+    // dropdown instead of a confusing "no results" after the picker auto-picks
+    // a forbidden branch).
+    let staffQuery = supabase
+      .from("staff")
+      .select("*, positions(name), sub_positions(name)")
+      .eq("tenant_id", tid);
+    let branchQuery = supabase
+      .from("branches")
+      .select("*")
+      .eq("tenant_id", tid)
+      .order("name");
+    if (!isOwner && userBranchIds.length > 0) {
+      staffQuery = staffQuery.in("branch_id", userBranchIds);
+      branchQuery = branchQuery.in("id", userBranchIds);
+    } else if (!isOwner) {
+      // Non-owner with no granted branches → show nothing.
+      staffQuery = staffQuery.eq("branch_id", "__none__");
+      branchQuery = branchQuery.eq("id", "__none__");
+    }
+
     const [staffRes, posRes, subPosRes, branchRes] = await Promise.all([
-      supabase
-        .from("staff")
-        .select("*, positions(name), sub_positions(name)")
-        .eq("tenant_id", tid)
-        .order("first_name"),
+      staffQuery.order("first_name"),
       supabase.from("positions").select("*").eq("tenant_id", tid).order("name"),
       supabase.from("sub_positions").select("*").eq("tenant_id", tid).order("name"),
-      supabase.from("branches").select("*").eq("tenant_id", tid).order("name"),
+      branchQuery,
     ]);
 
     if (staffRes.data) {
-      const mapped: StaffWithPosition[] = staffRes.data.map((s: Record<string, unknown>) => ({
+      // Also include any staff who work at one of the user's branches via the
+      // staff_branches m2m (drivers etc.) — owners already see everyone.
+      let extraStaff: typeof staffRes.data = [];
+      if (!isOwner && userBranchIds.length > 0) {
+        const { data: mappings } = await supabase
+          .from("staff_branches")
+          .select("staff_id")
+          .in("branch_id", userBranchIds);
+        const extraIds = Array.from(
+          new Set(
+            (mappings ?? [])
+              .map((m) => m.staff_id as string)
+              .filter((id) => !staffRes.data!.some((s) => s.id === id))
+          )
+        );
+        if (extraIds.length > 0) {
+          const { data: extras } = await supabase
+            .from("staff")
+            .select("*, positions(name), sub_positions(name)")
+            .in("id", extraIds);
+          extraStaff = extras ?? [];
+        }
+      }
+      const all = [...staffRes.data, ...extraStaff].sort((a, b) =>
+        ((a.first_name as string) ?? "").localeCompare((b.first_name as string) ?? "")
+      );
+      const mapped: StaffWithPosition[] = all.map((s: Record<string, unknown>) => ({
         ...(s as StaffWithPosition),
         position_name: (s.positions as { name: string } | null)?.name ?? null,
         sub_position_name: (s.sub_positions as { name: string } | null)?.name ?? null,
@@ -70,7 +115,8 @@ export default function StaffPage() {
     if (subPosRes.data) setSubPositions(subPosRes.data);
     if (branchRes.data) setBranches(branchRes.data);
     setLoading(false);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOwner, userBranchIds.join(",")]);
 
   useEffect(() => {
     fetchData();

@@ -237,14 +237,23 @@ export default function AutoRosterPage() {
       const { data: tid } = await supabase.rpc("get_user_tenant_id");
       if (tid) setTenantId(tid);
 
-      const { data: branchData } = await supabase.from("branches").select("*").order("name");
-      if (branchData) {
-        setBranches(branchData);
-        if (branchData.length > 0) {
-          setSelectedBranch(branchData[0].id);
-          if (branchData[0].opening_time) {
-            setDefaultStart(branchData[0].opening_time.slice(0, 5));
-          }
+      // Filter the branch dropdown by the user's accessible branches.
+      // get_user_branch_ids() returns NULL for owners (all) and an array
+      // for everyone else.
+      const [{ data: branchData }, { data: allowedIds }] = await Promise.all([
+        supabase.from("branches").select("*").order("name"),
+        supabase.rpc("get_user_branch_ids"),
+      ]);
+      const filtered = branchData
+        ? allowedIds == null
+          ? branchData
+          : branchData.filter((b) => (allowedIds as string[]).includes(b.id))
+        : [];
+      if (filtered.length > 0) {
+        setBranches(filtered);
+        setSelectedBranch(filtered[0].id);
+        if (filtered[0].opening_time) {
+          setDefaultStart(filtered[0].opening_time.slice(0, 5));
         }
       }
 

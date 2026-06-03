@@ -77,13 +77,20 @@ export default function AuraUploadPage() {
     const { data: tenantId } = await supabase.rpc("get_user_tenant_id");
     if (!tenantId) return;
 
-    const { data: branchData } = await supabase
-      .from("branches")
-      .select("id, name")
-      .eq("tenant_id", tenantId)
-      .order("name");
-
-    setBranches(branchData ?? []);
+    // Filter branches to the user's accessible set (owners see all).
+    const [{ data: branchData }, { data: allowedIds }] = await Promise.all([
+      supabase
+        .from("branches")
+        .select("id, name")
+        .eq("tenant_id", tenantId)
+        .order("name"),
+      supabase.rpc("get_user_branch_ids"),
+    ]);
+    const filtered =
+      allowedIds == null
+        ? branchData ?? []
+        : (branchData ?? []).filter((b) => (allowedIds as string[]).includes(b.id));
+    setBranches(filtered);
 
     // Load saved field mappings
     const { data: mappings } = await supabase

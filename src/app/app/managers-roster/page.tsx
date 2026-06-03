@@ -86,12 +86,19 @@ export default function ManagersRosterPage() {
       if (!member) return;
       setTenantId(member.tenant_id);
 
-      const [branchRes, posRes] = await Promise.all([
+      // Filter branch list to the user's accessible set. Owners see all
+      // (get_user_branch_ids returns NULL); managers get their array.
+      const [branchRes, posRes, { data: allowedIds }] = await Promise.all([
         supabase.from("branches").select("*").eq("tenant_id", member.tenant_id),
         supabase.from("positions").select("*").eq("tenant_id", member.tenant_id),
+        supabase.rpc("get_user_branch_ids"),
       ]);
 
-      const branchList = (branchRes.data ?? []) as Branch[];
+      const all = (branchRes.data ?? []) as Branch[];
+      const branchList =
+        allowedIds == null
+          ? all
+          : all.filter((b) => (allowedIds as string[]).includes(b.id));
       setBranches(branchList);
       if (branchList.length > 0) {
         setSelectedBranch(branchList[0].id);
