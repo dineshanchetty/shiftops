@@ -31,6 +31,7 @@ import {
 import type { AuraImport } from "@/lib/types";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
+import { useBranchSelection } from "@/lib/branch-selection";
 import { Lock } from "lucide-react";
 
 type StatusBanner = "aura" | "manual" | "submitted" | null;
@@ -38,6 +39,7 @@ type StatusBanner = "aura" | "manual" | "submitted" | null;
 export default function CashupPage() {
   const { hasPermission } = useAuth();
   const canUnlock = hasPermission("cashup.unlock");
+  const { selectedBranchId, setSelectedBranchId } = useBranchSelection();
 
   // ─── Selection state ────────────────────────────────────────────────
   const [branches, setBranches] = useState<{ id: string; name: string }[]>(
@@ -71,9 +73,15 @@ export default function CashupPage() {
         const [b, tid] = await Promise.all([getUserBranches(), getUserTenantId()]);
         setBranches(b);
         setTenantId(tid);
-        if (b.length === 1) {
-          setBranchId(b[0].id);
-        }
+        // Prefer the global top-bar selection if it's in this user's set,
+        // otherwise auto-pick the first (or only) accessible branch.
+        const preferred =
+          selectedBranchId && b.some((x) => x.id === selectedBranchId)
+            ? selectedBranchId
+            : b.length === 1
+            ? b[0].id
+            : "";
+        if (preferred) setBranchId(preferred);
       } catch (e) {
         console.error("Failed to load branches:", e);
       } finally {
@@ -171,8 +179,12 @@ export default function CashupPage() {
           className="h-10 rounded-lg border border-base-200 bg-surface px-3 text-sm text-base-900 focus:outline-none focus:ring-2 focus:ring-accent focus:border-accent min-w-[200px]"
           value={branchId}
           onChange={(e) => {
-            setBranchId(e.target.value);
+            const v = e.target.value;
+            setBranchId(v);
             setLoaded(false);
+            // Mirror to the global top-bar selection so the rest of the app
+            // stays in sync.
+            if (v && v !== selectedBranchId) setSelectedBranchId(v);
           }}
         >
           <option value="">Select branch...</option>

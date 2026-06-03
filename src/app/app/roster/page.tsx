@@ -11,6 +11,7 @@ import { ShiftEditor } from "@/components/roster/shift-editor";
 import { getRosterEntries, saveRosterEntries, deleteRosterEntry } from "./actions";
 import { exportRosterPdf } from "./export-pdf";
 import { useAuth } from "@/lib/auth-context";
+import { useBranchSelection } from "@/lib/branch-selection";
 import { FileDown, Wand2 } from "lucide-react";
 import Link from "next/link";
 import type { Branch, Position, SubPosition, Staff, RosterEntry } from "@/lib/types";
@@ -36,6 +37,7 @@ export default function RosterPage() {
   const [defaultLeaveHours, setDefaultLeaveHours] = useState<number>(9);
   const [branchName, setBranchName] = useState<string>("");
   const { tenant } = useAuth();
+  const { selectedBranchId, setSelectedBranchId } = useBranchSelection();
 
   // Selected branch operations data
   const [selectedBranchData, setSelectedBranchData] = useState<Branch | null>(null);
@@ -125,9 +127,17 @@ export default function RosterPage() {
         : [];
       if (filtered.length > 0) {
         setBranches(filtered);
-        if (!filters.branchId) {
-          setFilters((prev) => ({ ...prev, branchId: filtered[0].id }));
-          setBranchName(filtered[0].name);
+        // Prefer the top-bar's selected branch if it's in the user's accessible
+        // set; otherwise fall back to first allowed branch. Keeps the roster's
+        // local picker in lock-step with the global selector.
+        const preferred =
+          selectedBranchId && filtered.some((b) => b.id === selectedBranchId)
+            ? selectedBranchId
+            : filtered[0].id;
+        if (!filters.branchId || filters.branchId !== preferred) {
+          const pick = filtered.find((b) => b.id === preferred) ?? filtered[0];
+          setFilters((prev) => ({ ...prev, branchId: pick.id }));
+          setBranchName(pick.name);
         }
       }
 
@@ -423,7 +433,14 @@ export default function RosterPage() {
           positions={positions}
           subPositions={subPositions}
           filters={filters}
-          onFilterChange={setFilters}
+          onFilterChange={(next) => {
+            setFilters(next);
+            // Mirror the change back to the global top-bar selection so the
+            // rest of the app stays in sync.
+            if (next.branchId && next.branchId !== selectedBranchId) {
+              setSelectedBranchId(next.branchId);
+            }
+          }}
         />
 
         {/* Summary */}

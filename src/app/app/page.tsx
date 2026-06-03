@@ -7,6 +7,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { createClient } from '@/lib/supabase/client';
 import { useBranchSelection } from '@/lib/branch-selection';
+import { useAuth } from '@/lib/auth-context';
 import { formatCurrency, formatDate, formatTime } from '@/lib/utils';
 import {
   Building2,
@@ -384,6 +385,7 @@ export default function DashboardPage() {
   const [openMonths, setOpenMonths] = useState<Set<string>>(new Set());
   const [dashboardTab, setDashboardTab] = useState<DashboardTab>('overview');
   const { selectedBranchId } = useBranchSelection();
+  const { role, branchIds: userBranchIds } = useAuth();
 
   useEffect(() => {
     async function fetchDashboard() {
@@ -405,14 +407,32 @@ export default function DashboardPage() {
         const tenantId = member.tenant_id;
 
         /**
-         * Conditionally add a branch_id filter when the user has picked a
-         * specific branch from the top-bar selector. When the selection is
-         * "All branches" (selectedBranchId === null) queries stay
-         * tenant-wide. Usage: scope(supabase.from('xxx').select('...'))
+         * Scope a query to the user's accessible branches:
+         *   • selectedBranchId set    → filter to that one branch (any user)
+         *   • selectedBranchId null + owner  → no filter (sees all)
+         *   • selectedBranchId null + non-owner → restrict to user's branch_ids
+         *                                          (never "all" for managers)
          */
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const scope = <T extends { eq: (col: string, v: any) => T }>(qb: T): T =>
-          selectedBranchId ? qb.eq('branch_id', selectedBranchId) : qb;
+        const isOwner = role === 'owner';
+        const scope = <
+          T extends {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            eq: (col: string, v: any) => T;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            in: (col: string, v: any) => T;
+          }
+        >(
+          qb: T
+        ): T => {
+          if (selectedBranchId) return qb.eq('branch_id', selectedBranchId);
+          if (!isOwner) {
+            // Non-owner with no specific selection → restrict to their branches.
+            // Empty array means no access — pass an impossible id so query returns [].
+            const ids = userBranchIds.length > 0 ? userBranchIds : ['__none__'];
+            return qb.in('branch_id', ids);
+          }
+          return qb; // owner, all branches
+        };
 
         const today = getToday();
         const { start: monthStart, end: monthEnd } = getMonthRange();
@@ -805,9 +825,9 @@ export default function DashboardPage() {
     }
 
     fetchDashboard();
-    // Re-fetch whenever the user picks a different branch in the top-bar selector.
+    // Re-fetch when the picked branch, role, or assigned branches change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBranchId]);
+  }, [selectedBranchId, role, userBranchIds.join(',')]);
 
   // ─── Loading state ────────────────────────────────────────────────────────────
 
