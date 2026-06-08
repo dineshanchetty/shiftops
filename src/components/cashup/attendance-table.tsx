@@ -152,13 +152,14 @@ export function AttendanceTable({
   const [saving, startSaving] = useTransition();
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // Match by roster_entry_id (not staff_id) so split-shift rows for the same
+  // person stay independently editable.
   const updateRow = useCallback(
-    (staffId: string, updates: Partial<AttendanceRow>) => {
+    (rosterEntryId: string, updates: Partial<AttendanceRow>) => {
       setRows((prev) =>
         prev.map((r) => {
-          if (r.staff_id !== staffId) return r;
+          if (r.roster_entry_id !== rosterEntryId) return r;
           const updated = { ...r, ...updates };
-          // Auto-calc hours when times change
           if ("actual_start" in updates || "actual_end" in updates) {
             updated.actual_hours = calcHours(updated.actual_start, updated.actual_end);
           }
@@ -298,18 +299,25 @@ export function AttendanceTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => {
+            {rows.map((row, idx) => {
               const config = STATUS_CONFIG[row.status];
               const isPaidLeave =
                 row.leave_type === "paid_leave" || row.leave_type === "sick";
               const leaveLabel =
                 row.leave_type === "sick" ? "SICK LEAVE" : "PAID LEAVE";
+              // Is this the 2nd (or later) shift for the same staff member
+              // today? If so we show a "Shift 2" tag and indent the name.
+              const splitIndex = rows
+                .slice(0, idx)
+                .filter((r) => r.staff_id === row.staff_id).length;
+              const isSplitContinuation = splitIndex > 0;
               return (
                 <tr
-                  key={row.staff_id}
+                  key={row.roster_entry_id}
                   className={cn(
                     "border-b border-base-100 last:border-b-0 h-[36px]",
-                    isPaidLeave ? "bg-blue-50/40" : config.rowClass
+                    isPaidLeave ? "bg-blue-50/40" : config.rowClass,
+                    isSplitContinuation && "bg-amber-50/30"
                   )}
                 >
                   {/* Staff name */}
@@ -318,11 +326,19 @@ export function AttendanceTable({
                       <span
                         className={cn(
                           "text-sm font-medium text-base-800",
-                          row.status === "absent" && "line-through text-base-400"
+                          row.status === "absent" && "line-through text-base-400",
+                          isSplitContinuation && "pl-3 text-base-500"
                         )}
                       >
-                        {row.first_name} {row.last_name}
+                        {isSplitContinuation
+                          ? `↳ ${row.first_name} ${row.last_name}`
+                          : `${row.first_name} ${row.last_name}`}
                       </span>
+                      {isSplitContinuation && (
+                        <span className="text-[10px] font-bold text-amber-700 bg-amber-100 rounded px-1.5 py-0.5">
+                          SHIFT {splitIndex + 1}
+                        </span>
+                      )}
                       {isPaidLeave && (
                         <span className="text-[10px] font-bold text-blue-700 bg-blue-100 rounded px-1.5 py-0.5">
                           {leaveLabel}
@@ -356,7 +372,7 @@ export function AttendanceTable({
                         type="time"
                         value={row.actual_start ?? ""}
                         onChange={(e) =>
-                          updateRow(row.staff_id, {
+                          updateRow(row.roster_entry_id, {
                             actual_start: e.target.value || null,
                           })
                         }
@@ -375,7 +391,7 @@ export function AttendanceTable({
                         type="time"
                         value={row.actual_end ?? ""}
                         onChange={(e) =>
-                          updateRow(row.staff_id, {
+                          updateRow(row.roster_entry_id, {
                             actual_end: e.target.value || null,
                           })
                         }
@@ -402,7 +418,7 @@ export function AttendanceTable({
                       <select
                         value={row.status}
                         onChange={(e) =>
-                          updateRow(row.staff_id, {
+                          updateRow(row.roster_entry_id, {
                             status: e.target.value as AttendanceStatus,
                           })
                         }

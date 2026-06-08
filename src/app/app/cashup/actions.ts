@@ -510,10 +510,20 @@ export async function getRosteredStaff(
 
   if (!rosterEntries) return [];
 
-  const seen = new Set<string>();
+  // Sort so split-shift rows for the same staff appear in chronological order
+  // (shift 1 above shift 2 in the attendance table).
+  const sorted = [...rosterEntries].sort((a, b) => {
+    const s1 = (a as { shift_start: string | null }).shift_start ?? "";
+    const s2 = (b as { shift_start: string | null }).shift_start ?? "";
+    return s1.localeCompare(s2);
+  });
+
   const result: RosteredStaffEntry[] = [];
 
-  for (const entry of rosterEntries) {
+  // No dedupe on staff_id — each roster entry (i.e. each shift) gets its own
+  // attendance row. Split shifts therefore show as two rows so the manager can
+  // confirm hours for both, and the total reconciles with the rostered hours.
+  for (const entry of sorted) {
     const staff = entry.staff as unknown as {
       id: string;
       first_name: string;
@@ -523,10 +533,8 @@ export async function getRosteredStaff(
     } | null;
 
     if (!staff) continue;
-    if (seen.has(staff.id)) continue;
     // Exclude managers — they don't have hours recorded on the daily cashup.
     if (staff.position?.name?.toLowerCase() === "manager") continue;
-    seen.add(staff.id);
 
     const leaveType =
       (entry as unknown as { leave_type?: string | null }).leave_type ?? null;

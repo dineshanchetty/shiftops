@@ -79,6 +79,14 @@ export function CashupForm({
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [saved, setSaved] = useState(false);
   const [activeTab, setActiveTab] = useState<CashupTab>("takings");
+  // The "live" cashup id that updates as soon as the first save creates the
+  // row. The parent only fetches `existingCashup` once on load, so without
+  // this the form would re-INSERT on every save and the Submit button would
+  // stay disabled (gated on existingCashup?.id) until the user navigated
+  // away and back.
+  const [currentCashupId, setCurrentCashupId] = useState<string | undefined>(
+    existingCashup?.id
+  );
 
   // ─── Form state ───────────────────────────────────────────────────────
 
@@ -223,7 +231,7 @@ export function CashupForm({
   const handleSave = useCallback(() => {
     startTransition(async () => {
       const input: SaveCashupInput = {
-        id: existingCashup?.id,
+        id: currentCashupId,
         branch_id: branchId,
         date,
         gross_turnover: grossTurnover,
@@ -259,12 +267,19 @@ export function CashupForm({
 
       const result = await saveCashup(input);
       if (result.success) {
+        // Capture the row id from the first insert so subsequent saves
+        // update instead of re-inserting, and so Submit can fire.
+        if (result.cashupId && result.cashupId !== currentCashupId) {
+          setCurrentCashupId(result.cashupId);
+        }
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
+      } else if (result.error) {
+        setFeedback({ type: "error", text: result.error });
       }
     });
   }, [
-    existingCashup?.id,
+    currentCashupId,
     branchId,
     date,
     grossTurnover,
@@ -289,11 +304,13 @@ export function CashupForm({
   ]);
 
   const handleSubmit = useCallback(() => {
-    if (!existingCashup?.id) return;
+    // Submit is allowed once we have a saved row — either from initial load
+    // (existingCashup) or from a save we just did (currentCashupId).
+    if (!currentCashupId) return;
     startTransition(async () => {
       // Save first, then submit
       const saveResult = await saveCashup({
-        id: existingCashup.id,
+        id: currentCashupId,
         branch_id: branchId,
         date,
         gross_turnover: grossTurnover,
@@ -328,8 +345,11 @@ export function CashupForm({
       });
 
       if (saveResult.success) {
+        if (saveResult.cashupId && saveResult.cashupId !== currentCashupId) {
+          setCurrentCashupId(saveResult.cashupId);
+        }
         const submitResult = await submitCashup(
-          saveResult.cashupId ?? existingCashup.id
+          saveResult.cashupId ?? currentCashupId
         );
         if (submitResult.success) {
           setReadOnly(true);
@@ -344,7 +364,7 @@ export function CashupForm({
       }
     });
   }, [
-    existingCashup?.id,
+    currentCashupId,
     branchId,
     date,
     grossTurnover,
@@ -721,7 +741,7 @@ export function CashupForm({
               type="button"
               variant="primary"
               onClick={handleSubmit}
-              disabled={isPending || !existingCashup?.id}
+              disabled={isPending || !currentCashupId}
               className="w-full sm:w-auto"
             >
               {isPending && <Loader2 size={16} className="animate-spin" />}
