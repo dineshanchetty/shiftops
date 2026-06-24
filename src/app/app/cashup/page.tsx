@@ -247,7 +247,7 @@ export default function CashupPage() {
                     <th className="px-4 py-2 text-right hidden md:table-cell">
                       Cash Banked
                     </th>
-                    <th className="px-4 py-2 text-right hidden md:table-cell" title="T/O - Discounts + Del Charges - CC - Debtors - Cash Banked (excl. online payments)">
+                    <th className="px-4 py-2 text-right hidden md:table-cell" title="T/O - Discounts + Del Charges - CC - Debtors - Online Payments - Expenses - Cash Banked">
                       Variance*
                     </th>
                     <th className="px-4 py-2">Status</th>
@@ -262,8 +262,12 @@ export default function CashupPage() {
                     const creditCards = row.credit_cards ?? 0;
                     const debtors = row.debtors ?? 0;
                     const cashBanked = row.cash_banked ?? 0;
-                    // Approximate Daily Banking (excl. online payments which need a separate query)
-                    const approxBanking = turnover - discounts + delCharges - creditCards - debtors;
+                    const onlinePayments = row.online_payments_total ?? 0;
+                    const expenses = row.expenses_total ?? 0;
+                    // Full Daily Banking formula — matches the cashup form summary panel:
+                    // T/O - Discounts + Delivery - Credit Cards - Debtors - Online Payments - Expenses
+                    const approxBanking =
+                      turnover - discounts + delCharges - creditCards - debtors - onlinePayments - expenses;
                     const variance = approxBanking - cashBanked;
 
                     return (
@@ -287,7 +291,7 @@ export default function CashupPage() {
                             : "-"}
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono hidden md:table-cell"
-                            title={`T/O ${formatCurrency(turnover)} - Disc ${formatCurrency(discounts)} + Del ${formatCurrency(delCharges)} - CC ${formatCurrency(creditCards)} - Dbt ${formatCurrency(debtors)} = ${formatCurrency(approxBanking)} - Banked ${formatCurrency(cashBanked)}`}
+                            title={`T/O ${formatCurrency(turnover)} - Disc ${formatCurrency(discounts)} + Del ${formatCurrency(delCharges)} - CC ${formatCurrency(creditCards)} - Dbt ${formatCurrency(debtors)} - Online ${formatCurrency(onlinePayments)} - Exp ${formatCurrency(expenses)} = ${formatCurrency(approxBanking)} - Banked ${formatCurrency(cashBanked)}`}
                         >
                           {variance === 0 ? (
                             <span className="text-green-600">—</span>

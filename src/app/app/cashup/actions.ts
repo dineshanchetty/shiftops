@@ -651,6 +651,10 @@ export interface CashupHistoryRow {
   debtors: number | null;
   status: string | null;
   submitted_at: string | null;
+  /** Summed online payments + expenses for this cashup — needed so the history
+   *  variance matches the full Daily Banking formula on the cashup form. */
+  online_payments_total: number;
+  expenses_total: number;
 }
 
 export async function getCashupHistory(
@@ -665,14 +669,32 @@ export async function getCashupHistory(
   const { data } = await supabase
     .from("daily_cashups")
     .select(
-      "id, date, gross_turnover, cash_banked, discounts, delivery_charges, credit_cards, debtors, status, submitted_at"
+      "id, date, gross_turnover, cash_banked, discounts, delivery_charges, credit_cards, debtors, status, submitted_at, cashup_online_payments(amount), cashup_expenses(amount)"
     )
     .eq("branch_id", branchId)
     .eq("tenant_id", tenantId)
     .order("date", { ascending: false })
     .limit(limit);
 
-  return (data ?? []) as CashupHistoryRow[];
+  return (data ?? []).map((c) => {
+    const row = c as Record<string, unknown>;
+    const online = (row.cashup_online_payments as { amount: number | null }[] | null) ?? [];
+    const expenses = (row.cashup_expenses as { amount: number | null }[] | null) ?? [];
+    return {
+      id: row.id as string,
+      date: row.date as string,
+      gross_turnover: (row.gross_turnover as number | null) ?? null,
+      cash_banked: (row.cash_banked as number | null) ?? null,
+      discounts: (row.discounts as number | null) ?? null,
+      delivery_charges: (row.delivery_charges as number | null) ?? null,
+      credit_cards: (row.credit_cards as number | null) ?? null,
+      debtors: (row.debtors as number | null) ?? null,
+      status: (row.status as string | null) ?? null,
+      submitted_at: (row.submitted_at as string | null) ?? null,
+      online_payments_total: online.reduce((s, p) => s + (p.amount ?? 0), 0),
+      expenses_total: expenses.reduce((s, e) => s + (e.amount ?? 0), 0),
+    };
+  });
 }
 
 // ─── Unlock cashup ────────────────────────────────────────────────────────────

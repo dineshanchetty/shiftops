@@ -8,6 +8,7 @@ import {
 } from "@/components/reports/report-wrapper";
 import { formatCurrency, cn } from "@/lib/utils";
 import { generateCSV, triggerDownload } from "@/lib/report-utils";
+import { useAuth } from "@/lib/auth-context";
 import type { DailyCashup } from "@/lib/types";
 import { Target, Save, Calculator, Loader2 } from "lucide-react";
 
@@ -124,8 +125,12 @@ type TabMode = "setup" | "report";
 
 export default function TurnoverBudgetPage() {
   const supabase = createClient();
+  const { hasPermission } = useAuth();
+  // Budget setup is admin-only (reports.budget_manage). Managers/ops can view
+  // the Report tab but not the Budget Setup tab.
+  const canManageBudget = hasPermission("reports.budget_manage");
 
-  // Active tab
+  // Active tab — default to Report; Budget Setup is gated by permission.
   const [activeTab, setActiveTab] = useState<TabMode>("report");
 
   // ── Report tab state ──
@@ -560,6 +565,8 @@ export default function TurnoverBudgetPage() {
   // When switching tabs, re-run with last filters
   const switchTab = useCallback(
     (tab: TabMode) => {
+      // Hard guard: never let a non-admin into the Budget Setup tab.
+      if (tab === "setup" && !canManageBudget) return;
       setActiveTab(tab);
       if (lastFiltersRef.current) {
         // We need to manually trigger the correct load based on new tab
@@ -569,7 +576,7 @@ export default function TurnoverBudgetPage() {
         // Report tab will re-run via the next handleRun call
       }
     },
-    [loadBudgetSetup]
+    [loadBudgetSetup, canManageBudget]
   );
 
   // ── Derived totals for report ──
@@ -663,18 +670,20 @@ export default function TurnoverBudgetPage() {
     >
       {/* Tab switcher */}
       <div className="flex gap-0 mb-4 print:hidden border-b border-base-200">
-        <button
-          type="button"
-          onClick={() => switchTab("setup")}
-          className={cn(
-            "px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px",
-            activeTab === "setup"
-              ? "border-brand-500 text-brand-600"
-              : "border-transparent text-base-500 hover:text-base-700"
-          )}
-        >
-          Budget Setup
-        </button>
+        {canManageBudget && (
+          <button
+            type="button"
+            onClick={() => switchTab("setup")}
+            className={cn(
+              "px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px",
+              activeTab === "setup"
+                ? "border-brand-500 text-brand-600"
+                : "border-transparent text-base-500 hover:text-base-700"
+            )}
+          >
+            Budget Setup
+          </button>
+        )}
         <button
           type="button"
           onClick={() => switchTab("report")}
@@ -692,7 +701,7 @@ export default function TurnoverBudgetPage() {
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {/* BUDGET SETUP TAB                                                   */}
       {/* ═══════════════════════════════════════════════════════════════════ */}
-      {activeTab === "setup" && (
+      {activeTab === "setup" && canManageBudget && (
         <>
           {/* Table-not-exists warning */}
           {!tableExists && (
