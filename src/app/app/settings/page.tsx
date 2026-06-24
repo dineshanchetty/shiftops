@@ -9,7 +9,7 @@ import {
   CardDescription,
   CardContent,
 } from "@/components/ui/card";
-import { GitBranch, Link2, UserCog, CreditCard, ArrowRight, Tag, Users, ShieldCheck } from "lucide-react";
+import { GitBranch, Link2, UserCog, CreditCard, ArrowRight, Tag, Users, ShieldCheck, Truck } from "lucide-react";
 
 const settingsCards = [
   {
@@ -23,6 +23,13 @@ const settingsCards = [
     description: "Manage your branch locations, operating hours, and Aura POS connections.",
     href: "/app/settings/branches",
     icon: GitBranch,
+  },
+  {
+    title: "Suppliers",
+    description:
+      "Manage the supplier list used on the cashup Purchases tab and supplier reports.",
+    href: "/app/settings/suppliers",
+    icon: Truck,
   },
   {
     title: "Aura Integration",

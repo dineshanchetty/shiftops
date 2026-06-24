@@ -1,15 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-
-const PURCHASE_TYPES = [
-  "ABI Purchases",
-  "Coca-Cola",
-  "Supplier",
-  "Other",
-] as const;
+import { createClient } from "@/lib/supabase/client";
 
 export interface PurchaseItem {
   item_type: string | null;
@@ -27,8 +22,36 @@ export function PurchaseList({
   onChange,
   readOnly,
 }: PurchaseListProps) {
+  // Suppliers are tenant-managed (Settings → Suppliers). Load the active list
+  // for the dropdown; "Other" is always available as a catch-all.
+  const [suppliers, setSuppliers] = useState<string[]>([]);
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase
+      .from("suppliers")
+      .select("name")
+      .eq("active", true)
+      .order("name")
+      .then(({ data }) => {
+        if (data) setSuppliers(data.map((s) => s.name as string));
+      });
+  }, []);
+
+  // Build the option list: every active supplier + "Other", plus any value
+  // already saved on an existing row that isn't in the current list (so old
+  // cashups still render their original selection).
+  const baseOptions = [...suppliers, "Other"];
+  const savedExtras = purchases
+    .map((p) => p.item_type)
+    .filter((v): v is string => !!v && !baseOptions.includes(v));
+  const options = Array.from(new Set([...suppliers, ...savedExtras, "Other"]));
+
   function addPurchase() {
-    onChange([...purchases, { item_type: "ABI Purchases", amount: null }]);
+    onChange([
+      ...purchases,
+      { item_type: suppliers[0] ?? "Other", amount: null },
+    ]);
   }
 
   function removePurchase(index: number) {
@@ -57,7 +80,7 @@ export function PurchaseList({
             onChange={(e) => updatePurchase(index, "item_type", e.target.value)}
             disabled={readOnly}
           >
-            {PURCHASE_TYPES.map((type) => (
+            {options.map((type) => (
               <option key={type} value={type}>
                 {type}
               </option>

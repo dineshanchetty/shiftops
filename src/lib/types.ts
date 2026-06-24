@@ -847,6 +847,30 @@ export type Database = {
         Update: { key?: string; description?: string; category?: string }
         Relationships: []
       }
+      suppliers: {
+        Row: {
+          id: string
+          tenant_id: string
+          name: string
+          active: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          tenant_id: string
+          name: string
+          active?: boolean
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          tenant_id?: string
+          name?: string
+          active?: boolean
+          created_at?: string
+        }
+        Relationships: []
+      }
       roles: {
         Row: {
           id: string
