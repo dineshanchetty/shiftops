@@ -10,7 +10,8 @@ import { InviteModal } from "@/components/staff/invite-modal";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
-import { UserPlus, Upload, Users } from "lucide-react";
+import { UserPlus, Upload, Users, DollarSign } from "lucide-react";
+import { useRouter } from "next/navigation";
 import type { Position, SubPosition, Branch } from "@/lib/types";
 
 const selectClass = cn(
@@ -35,8 +36,10 @@ export default function StaffPage() {
   // Panels
   const [selectedStaff, setSelectedStaff] = useState<StaffWithPosition | null>(null);
   const [showInvite, setShowInvite] = useState(false);
+  const router = useRouter();
   const { hasPermission, role, branchIds: userBranchIds } = useAuth();
   const canAddStaff = hasPermission("staff.edit");
+  const canEditRates = hasPermission("staff.rate.edit");
   const isOwner = role === "owner";
 
   const fetchData = useCallback(async () => {
@@ -177,22 +180,34 @@ export default function StaffPage() {
       <PageShell
         title="Staff"
         action={
-          canAddStaff ? (
-            <div className="flex gap-2">
-              <Button variant="secondary" size="sm">
-                <Upload size={14} />
-                Import CSV
-              </Button>
+          <div className="flex gap-2">
+            {canEditRates && (
               <Button
-                variant="primary"
+                variant="secondary"
                 size="sm"
-                onClick={() => setShowInvite(true)}
+                onClick={() => router.push("/app/staff/rates")}
               >
-                <UserPlus size={14} />
-                Invite Staff
+                <DollarSign size={14} />
+                Bulk Rate Update
               </Button>
-            </div>
-          ) : undefined
+            )}
+            {canAddStaff && (
+              <>
+                <Button variant="secondary" size="sm">
+                  <Upload size={14} />
+                  Import CSV
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => setShowInvite(true)}
+                >
+                  <UserPlus size={14} />
+                  Invite Staff
+                </Button>
+              </>
+            )}
+          </div>
         }
       >
         {/* Filter bar */}

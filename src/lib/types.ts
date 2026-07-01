@@ -847,6 +847,42 @@ export type Database = {
         Update: { key?: string; description?: string; category?: string }
         Relationships: []
       }
+      staff_rates: {
+        Row: {
+          id: string
+          staff_id: string
+          tenant_id: string
+          hourly_rate: number
+          effective_from: string
+          effective_to: string | null
+          pay_model: string
+          created_at: string | null
+          created_by: string | null
+        }
+        Insert: {
+          id?: string
+          staff_id: string
+          tenant_id: string
+          hourly_rate: number
+          effective_from: string
+          effective_to?: string | null
+          pay_model?: string
+          created_at?: string | null
+          created_by?: string | null
+        }
+        Update: {
+          id?: string
+          staff_id?: string
+          tenant_id?: string
+          hourly_rate?: number
+          effective_from?: string
+          effective_to?: string | null
+          pay_model?: string
+          created_at?: string | null
+          created_by?: string | null
+        }
+        Relationships: []
+      }
       suppliers: {
         Row: {
           id: string
