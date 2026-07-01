@@ -222,6 +222,22 @@ export function AttendanceTable({
     [rows]
   );
 
+  // Rostered ("budget") hours = what the roster planned for the day. Sourced
+  // from the roster entries (shift_hours), independent of any attendance edits.
+  const totalRosteredHours = useMemo(
+    () => rosteredStaff.reduce((sum, s) => sum + (s.shift_hours ?? 0), 0),
+    [rosteredStaff]
+  );
+
+  // Deviation of captured hours from the rostered budget. Managers may adjust
+  // hours, but any variance from the plan must be visible.
+  const hoursDeviation = totalActualHours - totalRosteredHours;
+  const deviationPct =
+    totalRosteredHours > 0 ? (hoursDeviation / totalRosteredHours) * 100 : 0;
+  // Flag anything beyond a small rounding tolerance.
+  const overBudget = hoursDeviation > 0.05;
+  const underBudget = hoursDeviation < -0.05;
+
   if (rosteredStaff.length === 0) {
     return (
       <div className="py-8 text-center">
@@ -232,6 +248,51 @@ export function AttendanceTable({
 
   return (
     <div className="space-y-4">
+      {/* Budget deviation banner — rostered vs captured hours. Managers can
+          adjust hours, but any deviation from the roster budget is flagged. */}
+      <div
+        className={cn(
+          "flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-2.5 text-sm",
+          overBudget
+            ? "border-red-200 bg-red-50 text-red-800"
+            : underBudget
+            ? "border-amber-200 bg-amber-50 text-amber-800"
+            : "border-green-200 bg-green-50 text-green-800"
+        )}
+      >
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <span>
+            Rostered budget:{" "}
+            <span className="font-mono font-semibold">{totalRosteredHours.toFixed(1)}h</span>
+          </span>
+          <span>
+            Captured:{" "}
+            <span className="font-mono font-semibold">{totalActualHours.toFixed(1)}h</span>
+          </span>
+        </div>
+        <div className="font-medium">
+          {overBudget && (
+            <>
+              ⚠ Over budget by{" "}
+              <span className="font-mono font-bold">+{hoursDeviation.toFixed(1)}h</span>
+              {totalRosteredHours > 0 && (
+                <span className="font-mono"> ({deviationPct > 0 ? "+" : ""}{deviationPct.toFixed(0)}%)</span>
+              )}
+            </>
+          )}
+          {underBudget && (
+            <>
+              Under budget by{" "}
+              <span className="font-mono font-bold">{hoursDeviation.toFixed(1)}h</span>
+              {totalRosteredHours > 0 && (
+                <span className="font-mono"> ({deviationPct.toFixed(0)}%)</span>
+              )}
+            </>
+          )}
+          {!overBudget && !underBudget && <>On budget ✓</>}
+        </div>
+      </div>
+
       {/* Actions bar */}
       {!readOnly && (
         <div className="flex items-center justify-between">
