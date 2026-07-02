@@ -43,6 +43,10 @@ interface CalendarGridProps {
   tenantId?: string;
   /** Hours credited to a Paid Leave / sick day (from tenants.default_leave_hours). */
   defaultLeaveHours?: number;
+  /** Dates before this ISO date are locked for editing (null = all editable).
+   *  Mirrors the can_edit_roster_date RLS policy: owners get null, managers
+   *  with roster.edit get the 1st of next month, others get far-future. */
+  editableFrom?: string | null;
   onEntryUpdated?: () => void;
 }
 
@@ -155,6 +159,8 @@ interface DailyDetailPanelProps {
   branchId?: string;
   tenantId?: string;
   defaultLeaveHours: number;
+  /** True when this day is locked (live month / no permission) — all editing disabled. */
+  locked: boolean;
 }
 
 function DailyDetailPanel({
@@ -169,6 +175,7 @@ function DailyDetailPanel({
   branchId,
   tenantId,
   defaultLeaveHours,
+  locked,
   onEntryUpdated,
 }: DailyDetailPanelProps) {
   const supabase = createClient();
@@ -252,6 +259,9 @@ function DailyDetailPanel({
 
   async function handleSelect(staffId: string, entryId: string | null, value: string) {
     if (!branchId || !tenantId) return;
+    // Live-month lock — RLS rejects the write anyway; this avoids a confusing
+    // silent failure in the optimistic UI.
+    if (locked) return;
     setSavingStaffId(staffId);
 
     const existing = entryId ? localEntries.find((e) => e.id === entryId) : null;
@@ -455,7 +465,7 @@ function DailyDetailPanel({
           <select
             value={value === "custom" ? "" : value}
             onChange={(e) => handleSelect(s.id, entry?.id ?? null, e.target.value)}
-            disabled={isSaving}
+            disabled={isSaving || locked}
             className={cn(
               "w-full text-xs rounded-md border bg-white px-2 py-1 outline-none transition-colors",
               isPaidLeave
@@ -549,8 +559,8 @@ function DailyDetailPanel({
         {staffEntries.map((e, idx) =>
           renderShiftRow(s, e, e.id, idx === 0)
         )}
-        {/* Trailing "+ add another shift" — hidden when staff is OFF. */}
-        {!hasOff && renderShiftRow(s, null, `${s.id}-add`, false)}
+        {/* Trailing "+ add another shift" — hidden when staff is OFF or the day is locked. */}
+        {!hasOff && !locked && renderShiftRow(s, null, `${s.id}-add`, false)}
       </div>
     );
   }
@@ -602,6 +612,14 @@ function DailyDetailPanel({
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Live-month / permission lock notice */}
+      {locked && (
+        <div className="mx-4 sm:mx-6 mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+          🔒 This day is locked — roster changes in the live month (and the past)
+          can only be made by an Admin. You can still view the schedule.
         </div>
       )}
 
@@ -684,6 +702,7 @@ export function CalendarGrid({
   branchId,
   tenantId,
   defaultLeaveHours,
+  editableFrom,
   onEntryUpdated,
 }: CalendarGridProps) {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -958,6 +977,7 @@ export function CalendarGrid({
           branchId={effectiveBranchId}
           tenantId={effectiveTenantId}
           defaultLeaveHours={defaultLeaveHours ?? 9}
+          locked={editableFrom != null && selectedDate < editableFrom}
         />
       )}
     </div>

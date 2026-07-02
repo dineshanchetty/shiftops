@@ -36,8 +36,20 @@ export default function RosterPage() {
   const [tenantId, setTenantId] = useState<string>("");
   const [defaultLeaveHours, setDefaultLeaveHours] = useState<number>(9);
   const [branchName, setBranchName] = useState<string>("");
-  const { tenant } = useAuth();
+  const { tenant, role, hasPermission } = useAuth();
   const { selectedBranchId, setSelectedBranchId } = useBranchSelection();
+
+  // Roster edit lock (mirrors the can_edit_roster_date RLS policy):
+  //   owner → edit any date (editableFrom = null)
+  //   roster.edit → future months only (editableFrom = 1st of next month)
+  //   no roster.edit → view-only (editableFrom = far future)
+  const rosterEditableFrom = useMemo(() => {
+    if (role === "owner") return null;
+    if (!hasPermission("roster.edit")) return "9999-12-31";
+    const now = new Date();
+    const next = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-01`;
+  }, [role, hasPermission]);
 
   // Selected branch operations data
   const [selectedBranchData, setSelectedBranchData] = useState<Branch | null>(null);
@@ -465,6 +477,7 @@ export default function RosterPage() {
         branchId={filters.branchId}
         tenantId={tenantId}
         defaultLeaveHours={defaultLeaveHours}
+        editableFrom={rosterEditableFrom}
         onEntryUpdated={loadEntries}
       />
 

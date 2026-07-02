@@ -28,9 +28,12 @@ export async function listStaffRates(): Promise<
   // Branch scoping — owners see all; non-owners restricted to their branches.
   const { data: allowed } = await supabase.rpc("get_user_branch_ids");
 
+  // Disambiguate the branches embed — staff has TWO relationships to branches
+  // (the primary staff.branch_id FK and the staff_branches m2m), so a bare
+  // `branches(name)` errors with "more than one relationship was found".
   let staffQuery = supabase
     .from("staff")
-    .select("id, first_name, last_name, branch_id, branches(name)")
+    .select("id, first_name, last_name, branch_id, branches!staff_branch_id_fkey(name)")
     .eq("tenant_id", tenantId)
     .eq("active", true);
   if (Array.isArray(allowed)) {
