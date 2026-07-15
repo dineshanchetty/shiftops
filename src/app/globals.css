@@ -68,3 +68,63 @@
 .animate-in.slide-in-from-right {
   animation: slide-in-from-right 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
+
+/* ─── Print styles for reports ─────────────────────────────────────────────
+   Reports print via window.print(). Without these rules the overflow-x-auto
+   table wrappers clip everything beyond the viewport, so wide reports (e.g.
+   Global Turnover) only printed their first few columns. Landscape + compact
+   type + visible overflow lets every column fit the page. */
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+
+  /* Never clip tables — let them lay out at natural width and shrink type. */
+  .overflow-x-auto,
+  .overflow-y-auto,
+  .overflow-hidden {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  main {
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  table {
+    width: 100% !important;
+    table-layout: auto !important;
+    font-size: 8.5px !important;
+    border-collapse: collapse !important;
+  }
+
+  th,
+  td {
+    padding: 2px 4px !important;
+    white-space: normal !important;
+    word-break: break-word;
+  }
+
+  /* Sticky headers behave badly in print — flatten them. */
+  th.sticky,
+  thead th {
+    position: static !important;
+  }
+
+  /* Repeat the header row on every printed page. */
+  thead {
+    display: table-header-group;
+  }
+
+  tr {
+    break-inside: avoid;
+  }
+
+  /* Hide app chrome that print:hidden classes may miss. */
+  aside,
+  nav {
+    display: none !important;
+  }
+}

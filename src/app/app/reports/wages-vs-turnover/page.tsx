@@ -9,7 +9,9 @@ import { generateCSV, triggerDownload } from "@/lib/report-utils";
 import { TrendingUp, DollarSign, Receipt, CalendarDays } from "lucide-react";
 
 const LABOUR_TARGET = 25;
-const DEFAULT_HOURLY_RATE = 35; // R35/hr default for roster staff
+// Fallback only — real rates come from staff_rates (Rate History / Bulk Rate
+// Update), resolved per staff per day. Matches the payroll export default.
+const DEFAULT_HOURLY_RATE = 30.81;
 
 interface WagesRow {
   date: string;
@@ -41,21 +43,47 @@ export default function WagesVsTurnoverPage() {
 
       // Fetch roster entries — include is_off=true so paid_leave / sick get
       // counted as wages. Unpaid 'off' is filtered out in the loop below.
-      const { data: rosterEntries } = await supabase
-        .from("roster_entries")
-        .select("date, shift_hours, is_off, leave_type")
-        .in("branch_id", f.branchIds)
-        .gte("date", f.dateFrom)
-        .lte("date", f.dateTo);
+      const [{ data: rosterEntries }, { data: rateRows }] = await Promise.all([
+        supabase
+          .from("roster_entries")
+          .select("date, staff_id, shift_hours, is_off, leave_type")
+          .in("branch_id", f.branchIds)
+          .gte("date", f.dateFrom)
+          .lte("date", f.dateTo),
+        supabase
+          .from("staff_rates")
+          .select("staff_id, hourly_rate, effective_from, effective_to"),
+      ]);
 
-      // Build roster wages by date
+      // Per-staff effective-dated rate lookup (falls back to the default).
+      const ratesByStaff = new Map<
+        string,
+        { rate: number; from: string; to: string | null }[]
+      >();
+      for (const r of rateRows ?? []) {
+        const arr = ratesByStaff.get(r.staff_id) ?? [];
+        arr.push({ rate: Number(r.hourly_rate), from: r.effective_from, to: r.effective_to });
+        ratesByStaff.set(r.staff_id, arr);
+      }
+      const rateFor = (staffId: string, date: string): number => {
+        const arr = ratesByStaff.get(staffId);
+        if (arr) {
+          for (const r of arr) {
+            if (r.from <= date && (r.to === null || r.to >= date)) return r.rate;
+          }
+        }
+        return DEFAULT_HOURLY_RATE;
+      };
+
+      // Build roster wages by date — hours × the rate effective for that
+      // staff member on that day.
       const rosterWagesByDate = new Map<string, number>();
       if (rosterEntries) {
-        for (const re of rosterEntries as { date: string; shift_hours: number | null; is_off: boolean; leave_type: string | null }[]) {
+        for (const re of rosterEntries as { date: string; staff_id: string; shift_hours: number | null; is_off: boolean; leave_type: string | null }[]) {
           if (re.is_off && re.leave_type !== "paid_leave" && re.leave_type !== "sick") continue;
           const hours = re.shift_hours ?? 0;
           const existing = rosterWagesByDate.get(re.date) ?? 0;
-          rosterWagesByDate.set(re.date, existing + hours * DEFAULT_HOURLY_RATE);
+          rosterWagesByDate.set(re.date, existing + hours * rateFor(re.staff_id, re.date));
         }
       }
 

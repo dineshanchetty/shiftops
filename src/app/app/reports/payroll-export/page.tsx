@@ -25,6 +25,14 @@ interface PayrollRow {
   public_holiday_hours: number;
   leave_hours: number;
   overtime_hours: number;
+  /** Rand amounts per category — computed with the per-staff effective-dated
+   *  rate for each worked day, NOT a flat default. Needed so the CSV lines
+   *  match the preview when rates changed mid-period or differ per staff. */
+  normal_amount: number;
+  sunday_amount: number;
+  ph_amount: number;
+  leave_amount: number;
+  overtime_amount: number;
   total_wages: number;
   earnings_code: string;
   earnings_desc: string;
@@ -119,8 +127,53 @@ export default function PayrollExportPage() {
         (positions ?? []).map((p) => [p.id, p.name])
       );
 
+      // Per-staff effective-dated rates (Rate History / Bulk Rate Update).
+      // Resolved per worked day so mid-period rate changes pay correctly.
+      const { data: rateRows } = await supabase
+        .from("staff_rates")
+        .select("staff_id, hourly_rate, effective_from, effective_to");
+      const ratesByStaff = new Map<
+        string,
+        { rate: number; from: string; to: string | null }[]
+      >();
+      for (const r of rateRows ?? []) {
+        const arr = ratesByStaff.get(r.staff_id) ?? [];
+        arr.push({
+          rate: Number(r.hourly_rate),
+          from: r.effective_from,
+          to: r.effective_to,
+        });
+        ratesByStaff.set(r.staff_id, arr);
+      }
+      const rateFor = (staffId: string, date: string): number => {
+        const arr = ratesByStaff.get(staffId);
+        if (arr) {
+          for (const r of arr) {
+            if (r.from <= date && (r.to === null || r.to >= date)) return r.rate;
+          }
+        }
+        return DEFAULT_HOURLY_RATE;
+      };
+
+      // Shift templates whose name says "leave" — stores roster paid leave as
+      // a timed shift via these templates, which used to land in Normal hours.
+      // Match roster entries against them (branch + start + end) and classify
+      // as Leave instead.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: leaveTemplates } = await (supabase as any)
+        .from("shift_templates")
+        .select("branch_id, shift_start, shift_end, name")
+        .in("branch_id", f.branchIds)
+        .ilike("name", "%leave%");
+      const leaveShiftKeys = new Set(
+        ((leaveTemplates ?? []) as { branch_id: string; shift_start: string; shift_end: string }[]).map(
+          (t) => `${t.branch_id}|${t.shift_start?.slice(0, 5)}|${t.shift_end?.slice(0, 5)}`
+        )
+      );
+
       if (rosterEntries && rosterEntries.length > 0) {
-        // Group by staff with per-day classification
+        // Group by staff with per-day classification. Hours AND rand amounts
+        // accumulate together — the amount uses the rate effective on each day.
         const byStaff = new Map<
           string,
           {
@@ -134,13 +187,20 @@ export default function PayrollExportPage() {
             ph_hours: number;
             leave_hours: number;
             overtime_hours: number;
-            daily_hours: number[];
+            normal_amount: number;
+            sunday_amount: number;
+            ph_amount: number;
+            leave_amount: number;
+            overtime_amount: number;
           }
         >();
 
         for (const re of rosterEntries as (Record<string, unknown> & {
           staff_id: string;
+          branch_id: string;
           date: string;
+          shift_start: string | null;
+          shift_end: string | null;
           shift_hours: number | null;
           is_off: boolean | null;
           leave_type: string | null;
@@ -163,13 +223,26 @@ export default function PayrollExportPage() {
             continue;
           }
 
-          // Paid leave / sick from the roster trumps attendance-status detection.
+          // Leave detection, in priority order:
+          //   1. Explicit leave_type on the roster row (paid_leave / sick)
+          //   2. The shift matches a "Leave"-named shift template — stores
+          //      schedule leave as a timed shift; without this it lands in
+          //      Normal hours
+          //   3. Attendance marked absent/leave
           const isPaidLeaveRow =
             re.leave_type === "paid_leave" || re.leave_type === "sick";
+          const isLeaveTemplateShift =
+            !re.is_off &&
+            re.shift_start != null &&
+            re.shift_end != null &&
+            leaveShiftKeys.has(
+              `${re.branch_id}|${re.shift_start.slice(0, 5)}|${re.shift_end.slice(0, 5)}`
+            );
 
           const attendanceArr = re.attendance;
           const isLeave =
             isPaidLeaveRow ||
+            isLeaveTemplateShift ||
             (attendanceArr &&
               attendanceArr.length > 0 &&
               attendanceArr.some((a) => a.status === "absent" || a.status === "leave"));
@@ -187,21 +260,12 @@ export default function PayrollExportPage() {
           const overtime = isLeave ? 0 : Math.max(0, hours - 9);
           const regularHours = hours - overtime;
 
-          const existing = byStaff.get(re.staff_id);
-          if (existing) {
-            existing.daily_hours.push(hours);
-            existing.overtime_hours += overtime;
-            if (isLeave) {
-              existing.leave_hours += regularHours;
-            } else if (dayType === "public_holiday") {
-              existing.ph_hours += regularHours;
-            } else if (dayType === "sunday") {
-              existing.sunday_hours += regularHours;
-            } else {
-              existing.normal_hours += regularHours;
-            }
-          } else {
-            const entry = {
+          // Rate effective on THIS day for THIS staff member.
+          const rate = rateFor(re.staff_id, re.date);
+
+          let agg = byStaff.get(re.staff_id);
+          if (!agg) {
+            agg = {
               staff_id: re.staff_id,
               first_name: re.staff.first_name,
               last_name: re.staff.last_name,
@@ -211,19 +275,30 @@ export default function PayrollExportPage() {
               sunday_hours: 0,
               ph_hours: 0,
               leave_hours: 0,
-              overtime_hours: overtime,
-              daily_hours: [hours],
+              overtime_hours: 0,
+              normal_amount: 0,
+              sunday_amount: 0,
+              ph_amount: 0,
+              leave_amount: 0,
+              overtime_amount: 0,
             };
-            if (isLeave) {
-              entry.leave_hours = regularHours;
-            } else if (dayType === "public_holiday") {
-              entry.ph_hours = regularHours;
-            } else if (dayType === "sunday") {
-              entry.sunday_hours = regularHours;
-            } else {
-              entry.normal_hours = regularHours;
-            }
-            byStaff.set(re.staff_id, entry);
+            byStaff.set(re.staff_id, agg);
+          }
+
+          agg.overtime_hours += overtime;
+          agg.overtime_amount += overtime * rate * 1.5;
+          if (isLeave) {
+            agg.leave_hours += regularHours;
+            agg.leave_amount += regularHours * rate;
+          } else if (dayType === "public_holiday") {
+            agg.ph_hours += regularHours;
+            agg.ph_amount += regularHours * rate * PH_MULTIPLIER;
+          } else if (dayType === "sunday") {
+            agg.sunday_hours += regularHours;
+            agg.sunday_amount += regularHours * rate * SUNDAY_MULTIPLIER;
+          } else {
+            agg.normal_hours += regularHours;
+            agg.normal_amount += regularHours * rate;
           }
         }
 
@@ -232,14 +307,15 @@ export default function PayrollExportPage() {
             ? posMap.get(s.position_id) ?? ""
             : "";
 
-          // Wages: driver wages from cashup if available, else calculate from hours x rate
+          // Wages: driver wages from cashup if available, else the accumulated
+          // per-day-rate amounts.
           const driverWages = driverWagesMap.get(s.staff_id) ?? 0;
           const calculatedWages =
-            s.normal_hours * DEFAULT_HOURLY_RATE +
-            s.sunday_hours * DEFAULT_HOURLY_RATE * SUNDAY_MULTIPLIER +
-            s.ph_hours * DEFAULT_HOURLY_RATE * PH_MULTIPLIER +
-            s.leave_hours * DEFAULT_HOURLY_RATE +
-            s.overtime_hours * DEFAULT_HOURLY_RATE * 1.5;
+            s.normal_amount +
+            s.sunday_amount +
+            s.ph_amount +
+            s.leave_amount +
+            s.overtime_amount;
           const totalWages = driverWages > 0 ? driverWages : calculatedWages;
 
           const totalHours =
@@ -263,6 +339,11 @@ export default function PayrollExportPage() {
             public_holiday_hours: Math.round(s.ph_hours * 100) / 100,
             leave_hours: Math.round(s.leave_hours * 100) / 100,
             overtime_hours: Math.round(s.overtime_hours * 100) / 100,
+            normal_amount: Math.round(s.normal_amount * 100) / 100,
+            sunday_amount: Math.round(s.sunday_amount * 100) / 100,
+            ph_amount: Math.round(s.ph_amount * 100) / 100,
+            leave_amount: Math.round(s.leave_amount * 100) / 100,
+            overtime_amount: Math.round(s.overtime_amount * 100) / 100,
             total_wages: Math.round(totalWages * 100) / 100,
             earnings_code: "1000",
             earnings_desc: "Normal",
@@ -324,7 +405,7 @@ export default function PayrollExportPage() {
     doc.setFontSize(8);
     doc.setTextColor(107, 114, 128);
     doc.text(
-      `Default rate: R${DEFAULT_HOURLY_RATE.toFixed(2)}/hr · Sunday ${SUNDAY_MULTIPLIER}× · PH ${PH_MULTIPLIER}× · OT 1.5×`,
+      `Per-staff rates from Rate History (fallback R${DEFAULT_HOURLY_RATE.toFixed(2)}/hr) · Sunday ${SUNDAY_MULTIPLIER}× · PH ${PH_MULTIPLIER}× · OT 1.5×`,
       40,
       84
     );
@@ -436,70 +517,42 @@ export default function PayrollExportPage() {
     ];
     const rows: (string | number)[][] = [];
 
+    // Amounts come from the per-day-rate accumulation on the row — the CSV
+    // matches the preview exactly, including mid-period rate changes.
     for (const r of data) {
       // 1000 = Normal hours
       if (r.normal_hours > 0) {
         rows.push([
-          r.emp_code,
-          r.surname,
-          r.first_name,
-          r.id_number,
-          "1000",
-          "Normal",
-          r.normal_hours,
-          Math.round(r.normal_hours * DEFAULT_HOURLY_RATE * 100) / 100,
+          r.emp_code, r.surname, r.first_name, r.id_number,
+          "1000", "Normal", r.normal_hours, r.normal_amount,
         ]);
       }
       // 1001 = Sunday hours
       if (r.sunday_hours > 0) {
         rows.push([
-          r.emp_code,
-          r.surname,
-          r.first_name,
-          r.id_number,
-          "1001",
-          "Sunday",
-          r.sunday_hours,
-          Math.round(r.sunday_hours * DEFAULT_HOURLY_RATE * SUNDAY_MULTIPLIER * 100) / 100,
+          r.emp_code, r.surname, r.first_name, r.id_number,
+          "1001", "Sunday", r.sunday_hours, r.sunday_amount,
         ]);
       }
       // 1002 = Public Holiday hours
       if (r.public_holiday_hours > 0) {
         rows.push([
-          r.emp_code,
-          r.surname,
-          r.first_name,
-          r.id_number,
-          "1002",
-          "Public Holiday",
-          r.public_holiday_hours,
-          Math.round(r.public_holiday_hours * DEFAULT_HOURLY_RATE * PH_MULTIPLIER * 100) / 100,
+          r.emp_code, r.surname, r.first_name, r.id_number,
+          "1002", "Public Holiday", r.public_holiday_hours, r.ph_amount,
         ]);
       }
       // 1003 = Paid Leave (paid at normal rate)
       if (r.leave_hours > 0) {
         rows.push([
-          r.emp_code,
-          r.surname,
-          r.first_name,
-          r.id_number,
-          "1003",
-          "Paid Leave",
-          r.leave_hours,
-          Math.round(r.leave_hours * DEFAULT_HOURLY_RATE * 100) / 100,
+          r.emp_code, r.surname, r.first_name, r.id_number,
+          "1003", "Paid Leave", r.leave_hours, r.leave_amount,
         ]);
       }
       // 3000 = Overtime hours
       if (r.overtime_hours > 0) {
         rows.push([
-          r.emp_code,
-          r.surname,
-          r.first_name,
-          r.id_number,
-          "3000",
-          "Overtime",
-          r.overtime_hours,
-          Math.round(r.overtime_hours * DEFAULT_HOURLY_RATE * 1.5 * 100) / 100,
+          r.emp_code, r.surname, r.first_name, r.id_number,
+          "3000", "Overtime", r.overtime_hours, r.overtime_amount,
         ]);
       }
     }
