@@ -109,7 +109,10 @@ export default function WagesVsTurnoverPage() {
         gross_turnover: number | null;
         cashup_driver_entries: { staff_id: string | null; wages: number | null }[];
       })[]) {
-        turnoverByDate.set(c.date, (turnoverByDate.get(c.date) ?? 0) + (c.gross_turnover ?? 0));
+        // Labour % is measured against NETT turnover — VAT isn't revenue.
+        // gross_turnover is VAT-inclusive, so strip 15%.
+        const nett = (c.gross_turnover ?? 0) / 1.15;
+        turnoverByDate.set(c.date, (turnoverByDate.get(c.date) ?? 0) + nett);
         for (const d of c.cashup_driver_entries ?? []) {
           driverWagesByDate.set(c.date, (driverWagesByDate.get(c.date) ?? 0) + (d.wages ?? 0));
           if (d.staff_id) driverStaffDates.add(`${c.date}|${d.staff_id}`);
@@ -180,7 +183,7 @@ export default function WagesVsTurnoverPage() {
   );
 
   const handleExportCSV = useCallback(() => {
-    const headers = ["Date", "Turnover", "Total Wages", "Labour %", "Target %", "Over/Under"];
+    const headers = ["Date", "Turnover (Nett)", "Total Wages", "Labour %", "Target %", "Over/Under"];
     const rows = data.map((r) => [r.date, r.turnover, r.total_wages, `${r.labour_pct.toFixed(1)}%`, `${r.target_pct}%`, `${r.over_under.toFixed(1)}%`]);
     triggerDownload(generateCSV(headers, rows), "wages-vs-turnover.csv", "text/csv");
   }, [data]);
@@ -194,7 +197,7 @@ export default function WagesVsTurnoverPage() {
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
         <StatCard label="Average Labour %" value={`${avgLabour.toFixed(1)}%`} icon={<TrendingUp className="h-5 w-5" />} />
         <StatCard label="Total Wages" value={formatCurrency(totalWages)} icon={<DollarSign className="h-5 w-5" />} />
-        <StatCard label="Total Turnover" value={formatCurrency(totalTurnover)} icon={<Receipt className="h-5 w-5" />} />
+        <StatCard label="Total Turnover (Nett)" value={formatCurrency(totalTurnover)} icon={<Receipt className="h-5 w-5" />} />
       </div>
 
       {loading && (
@@ -217,7 +220,7 @@ export default function WagesVsTurnoverPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-surface-2">
-                {["Date", "Turnover", "Total Wages", "Labour %", "Target %", "Over/Under"].map((h) => (
+                {["Date", "Turnover (Nett)", "Total Wages", "Labour %", "Target %", "Over/Under"].map((h) => (
                   <th key={h} className={cn("px-4 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 sticky top-0 bg-surface-2", h === "Date" ? "text-left" : "text-right")}>{h}</th>
                 ))}
               </tr>
