@@ -12,6 +12,25 @@ const LABOUR_TARGET = 25;
 // Fallback only — real rates come from staff_rates (Rate History / Bulk Rate
 // Update), resolved per staff per day. Matches the payroll export default.
 const DEFAULT_HOURLY_RATE = 30.81;
+// Wage multipliers — keep in lock-step with the Sage Pastel payroll export.
+const SUNDAY_MULTIPLIER = 1.5;
+const PH_MULTIPLIER = 2;
+const OT_MULTIPLIER = 1.5;
+const OT_THRESHOLD_HOURS = 9;
+
+// South Africa 2026 public holidays (same list as payroll-export)
+const SA_PUBLIC_HOLIDAYS_2026 = new Set([
+  "2026-01-01", "2026-03-21", "2026-04-03", "2026-04-06", "2026-04-27",
+  "2026-05-01", "2026-06-16", "2026-08-09", "2026-08-10", "2026-09-24",
+  "2026-12-16", "2026-12-25", "2026-12-26",
+]);
+
+function classifyDay(dateStr: string): "normal" | "sunday" | "public_holiday" {
+  if (SA_PUBLIC_HOLIDAYS_2026.has(dateStr)) return "public_holiday";
+  const d = new Date(dateStr + "T00:00:00");
+  if (d.getDay() === 0) return "sunday";
+  return "normal";
+}
 
 interface WagesRow {
   date: string;
@@ -32,10 +51,11 @@ export default function WagesVsTurnoverPage() {
       if (f.branchIds.length === 0) return;
       setLoading(true);
 
-      // Fetch cashups with driver wages
+      // Fetch cashups with driver wages (staff_id needed so rostered drivers
+      // aren't double-counted — their pay comes from the cashup driver entry).
       const { data: cashups } = await supabase
         .from("daily_cashups")
-        .select("*, cashup_driver_entries(wages)")
+        .select("*, cashup_driver_entries(staff_id, wages)")
         .in("branch_id", f.branchIds)
         .gte("date", f.dateFrom)
         .lte("date", f.dateTo)
@@ -43,10 +63,12 @@ export default function WagesVsTurnoverPage() {
 
       // Fetch roster entries — include is_off=true so paid_leave / sick get
       // counted as wages. Unpaid 'off' is filtered out in the loop below.
+      // Attendance is embedded so confirmed actual hours override scheduled,
+      // matching the payroll export.
       const [{ data: rosterEntries }, { data: rateRows }] = await Promise.all([
         supabase
           .from("roster_entries")
-          .select("date, staff_id, shift_hours, is_off, leave_type")
+          .select("date, staff_id, shift_hours, is_off, leave_type, attendance(actual_hours, status)")
           .in("branch_id", f.branchIds)
           .gte("date", f.dateFrom)
           .lte("date", f.dateTo),
@@ -75,41 +97,83 @@ export default function WagesVsTurnoverPage() {
         return DEFAULT_HOURLY_RATE;
       };
 
-      // Build roster wages by date — hours × the rate effective for that
-      // staff member on that day.
+      // Pass 1 — cashups: sum turnover + driver wages per date, and record
+      // which staff earned driver wages on which date so their rostered hours
+      // are excluded below (driver wages REPLACE roster wages, same rule as
+      // the payroll export — previously they were both counted).
+      const turnoverByDate = new Map<string, number>();
+      const driverWagesByDate = new Map<string, number>();
+      const driverStaffDates = new Set<string>(); // `${date}|${staff_id}`
+      for (const c of (cashups ?? []) as (Record<string, unknown> & {
+        date: string;
+        gross_turnover: number | null;
+        cashup_driver_entries: { staff_id: string | null; wages: number | null }[];
+      })[]) {
+        turnoverByDate.set(c.date, (turnoverByDate.get(c.date) ?? 0) + (c.gross_turnover ?? 0));
+        for (const d of c.cashup_driver_entries ?? []) {
+          driverWagesByDate.set(c.date, (driverWagesByDate.get(c.date) ?? 0) + (d.wages ?? 0));
+          if (d.staff_id) driverStaffDates.add(`${c.date}|${d.staff_id}`);
+        }
+      }
+
+      // Pass 2 — roster wages per date, matching payroll-export logic:
+      // confirmed attendance hours override scheduled, Sunday/PH/OT
+      // multipliers apply, paid leave pays plain rate with no OT.
       const rosterWagesByDate = new Map<string, number>();
-      if (rosterEntries) {
-        for (const re of rosterEntries as { date: string; staff_id: string; shift_hours: number | null; is_off: boolean; leave_type: string | null }[]) {
-          if (re.is_off && re.leave_type !== "paid_leave" && re.leave_type !== "sick") continue;
-          const hours = re.shift_hours ?? 0;
-          const existing = rosterWagesByDate.get(re.date) ?? 0;
-          rosterWagesByDate.set(re.date, existing + hours * rateFor(re.staff_id, re.date));
+      for (const re of (rosterEntries ?? []) as {
+        date: string;
+        staff_id: string;
+        shift_hours: number | null;
+        is_off: boolean;
+        leave_type: string | null;
+        attendance: { actual_hours: number | null; status: string | null }[] | null;
+      }[]) {
+        if (re.is_off && re.leave_type !== "paid_leave" && re.leave_type !== "sick") continue;
+        // Driver paid via the cashup for this date — skip roster hours.
+        if (driverStaffDates.has(`${re.date}|${re.staff_id}`)) continue;
+
+        const att = re.attendance ?? [];
+        const isLeave =
+          re.leave_type === "paid_leave" ||
+          re.leave_type === "sick" ||
+          att.some((a) => a.status === "absent" || a.status === "leave");
+        const confirmed = att.find((a) => a.status === "confirmed");
+        const hours = confirmed?.actual_hours ?? re.shift_hours ?? 0;
+        const rate = rateFor(re.staff_id, re.date);
+
+        let amount: number;
+        if (isLeave) {
+          amount = hours * rate;
+        } else {
+          const ot = Math.max(0, hours - OT_THRESHOLD_HOURS);
+          const reg = hours - ot;
+          const dayType = classifyDay(re.date);
+          const mult =
+            dayType === "public_holiday" ? PH_MULTIPLIER : dayType === "sunday" ? SUNDAY_MULTIPLIER : 1;
+          amount = reg * rate * mult + ot * rate * OT_MULTIPLIER;
         }
+        rosterWagesByDate.set(re.date, (rosterWagesByDate.get(re.date) ?? 0) + amount);
       }
 
-      if (cashups) {
-        const byDate = new Map<string, WagesRow>();
-        for (const c of cashups as (Record<string, unknown> & { date: string; gross_turnover: number | null; cashup_driver_entries: { wages: number | null }[] })[]) {
-          const turnover = c.gross_turnover ?? 0;
-          const driverWages = (c.cashup_driver_entries ?? []).reduce((s, d) => s + (d.wages ?? 0), 0);
-          const rosterWages = rosterWagesByDate.get(c.date) ?? 0;
-          const totalWages = driverWages + rosterWages;
-
-          const existing = byDate.get(c.date);
-          if (existing) {
-            existing.turnover += turnover;
-            existing.total_wages += totalWages;
-            existing.labour_pct = existing.turnover > 0 ? (existing.total_wages / existing.turnover) * 100 : 0;
-            existing.over_under = existing.labour_pct - LABOUR_TARGET;
-          } else {
-            const pct = turnover > 0 ? (totalWages / turnover) * 100 : 0;
-            byDate.set(c.date, { date: c.date, turnover, total_wages: totalWages, labour_pct: pct, target_pct: LABOUR_TARGET, over_under: pct - LABOUR_TARGET });
-          }
-        }
-        setData(Array.from(byDate.values()));
-      } else {
-        setData([]);
-      }
+      // Combine — roster wages counted exactly ONCE per date (previously they
+      // were re-added for every branch's cashup row on that date, inflating
+      // wages up to Nx on multi-branch selections).
+      const rows: WagesRow[] = Array.from(turnoverByDate.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([date, turnover]) => {
+          const totalWages =
+            (driverWagesByDate.get(date) ?? 0) + (rosterWagesByDate.get(date) ?? 0);
+          const pct = turnover > 0 ? (totalWages / turnover) * 100 : 0;
+          return {
+            date,
+            turnover,
+            total_wages: totalWages,
+            labour_pct: pct,
+            target_pct: LABOUR_TARGET,
+            over_under: pct - LABOUR_TARGET,
+          };
+        });
+      setData(rows);
       setLoading(false);
     },
     [supabase]

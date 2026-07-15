@@ -712,7 +712,20 @@ export default function DashboardPage() {
         // ─── Predictive calculations ─────────────────────────────────────────
 
         const tomorrowDow = getDayOfWeek(tomorrow);
-        const last28 = (last28CashupsRes.data ?? []) as { date: string; gross_turnover: number | null }[];
+        // The cashup queries return ONE ROW PER BRANCH PER DAY. Every forecast
+        // stat needs per-DAY totals — without this aggregation, averages were
+        // effectively "one branch's typical day" (whichever rows happened to
+        // land), which made the next-day forecast look stuck on a single store.
+        const last28Rows = (last28CashupsRes.data ?? []) as { date: string; gross_turnover: number | null }[];
+        const last28ByDate = new Map<string, number>();
+        for (const c of last28Rows) {
+          if (c.gross_turnover != null) {
+            last28ByDate.set(c.date, (last28ByDate.get(c.date) ?? 0) + c.gross_turnover);
+          }
+        }
+        const last28 = Array.from(last28ByDate.entries()).map(
+          ([date, gross_turnover]) => ({ date, gross_turnover })
+        );
         const sameDowEntries = last28
           .filter((c) => getDayOfWeek(c.date) === tomorrowDow && c.gross_turnover != null)
           .map((c) => c.gross_turnover as number);
@@ -739,15 +752,22 @@ export default function DashboardPage() {
         }
 
         const last7Raw = (last7CashupsRes.data ?? []) as { date: string; gross_turnover: number | null }[];
+        // Sum across branches per date — one row per branch per day comes back.
         const last7Map = new Map<string, number>();
-        last7Raw.forEach((c) => { if (c.gross_turnover != null) last7Map.set(c.date, c.gross_turnover); });
+        last7Raw.forEach((c) => {
+          if (c.gross_turnover != null) {
+            last7Map.set(c.date, (last7Map.get(c.date) ?? 0) + c.gross_turnover);
+          }
+        });
 
         // Show Mon-Sun of the current week (always 7 days)
         const last7DaysTurnover: { date: string; turnover: number }[] = [];
         const last7DaysPrevYear: { date: string; turnover: number }[] = [];
         const prevYearLast7Map = new Map<string, number>();
         for (const c of (prevYearLast7Res.data ?? []) as { date: string; gross_turnover: number | null }[]) {
-          if (c.gross_turnover != null) prevYearLast7Map.set(c.date, c.gross_turnover);
+          if (c.gross_turnover != null) {
+            prevYearLast7Map.set(c.date, (prevYearLast7Map.get(c.date) ?? 0) + c.gross_turnover);
+          }
         }
         const nowDate = new Date();
         const currentDow = nowDate.getDay(); // 0=Sun, 1=Mon...
@@ -755,7 +775,9 @@ export default function DashboardPage() {
         for (let i = 0; i < 7; i++) {
           const d = new Date();
           d.setDate(d.getDate() + mondayOffset + i);
-          const ds = d.toISOString().split('T')[0];
+          // Local date parts — toISOString() converts to UTC and can shift the
+          // day in SAST (+02:00), misaligning the chart against the data map.
+          const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
           last7DaysTurnover.push({ date: ds, turnover: last7Map.get(ds) ?? 0 });
           const dsPrev = sameDowLastYear(ds);
           last7DaysPrevYear.push({ date: dsPrev, turnover: prevYearLast7Map.get(dsPrev) ?? 0 });
