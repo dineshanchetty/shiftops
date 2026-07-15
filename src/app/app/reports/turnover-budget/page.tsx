@@ -136,6 +136,7 @@ export default function TurnoverBudgetPage() {
   // ── Report tab state ──
   const [rows, setRows] = useState<TurnoverRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
   const [dailyBudgetFallback, setDailyBudgetFallback] = useState(15000);
   const [visibleCols, setVisibleCols] = useState<Set<ColumnKey>>(
     () => new Set(ALL_COLUMNS.map((c) => c.key))
@@ -432,7 +433,9 @@ export default function TurnoverBudgetPage() {
 
       if (f.branchIds.length === 0) return;
       setLoading(true);
+      setRunError(null);
 
+      try {
       const fromDate = new Date(f.dateFrom + "T00:00:00");
       const year = fromDate.getFullYear();
       const month = fromDate.getMonth();
@@ -549,8 +552,18 @@ export default function TurnoverBudgetPage() {
         budgetWageTotal,
         prevYearNettTO: allRows.reduce((s, r) => s + r.prevYrTO, 0),
       });
-
-      setLoading(false);
+      } catch (err) {
+        // Without this, any rejection above left the page stuck on the
+        // loading skeleton forever ("report not loading") with the real
+        // cause buried in the console.
+        console.error("Turnover vs Budget failed to load:", err);
+        setRows([]);
+        setRunError(
+          err instanceof Error ? err.message : "Failed to load report data."
+        );
+      } finally {
+        setLoading(false);
+      }
     },
     [
       supabase,
@@ -892,6 +905,12 @@ export default function TurnoverBudgetPage() {
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {activeTab === "report" && (
         <>
+          {runError && (
+            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              Failed to load report: {runError}
+            </div>
+          )}
+
           {/* Fallback budget input */}
           <div className="flex items-end gap-3 mb-4 print:hidden">
             <div>
