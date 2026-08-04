@@ -45,27 +45,31 @@ export default function WagesVsTurnoverPage() {
   const supabase = createClient();
   const [data, setData] = useState<WagesRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
 
   const handleRun = useCallback(
     async (f: ReportFilters) => {
       if (f.branchIds.length === 0) return;
       setLoading(true);
+      setRunError(null);
 
+      try {
       // Fetch cashups with driver wages (staff_id needed so rostered drivers
       // aren't double-counted — their pay comes from the cashup driver entry).
-      const { data: cashups } = await supabase
+      const { data: cashups, error: cashupsErr } = await supabase
         .from("daily_cashups")
         .select("*, cashup_driver_entries(staff_id, wages)")
         .in("branch_id", f.branchIds)
         .gte("date", f.dateFrom)
         .lte("date", f.dateTo)
         .order("date", { ascending: true });
+      if (cashupsErr) throw new Error(`Cashups: ${cashupsErr.message}`);
 
       // Fetch roster entries — include is_off=true so paid_leave / sick get
       // counted as wages. Unpaid 'off' is filtered out in the loop below.
       // Attendance is embedded so confirmed actual hours override scheduled,
       // matching the payroll export.
-      const [{ data: rosterEntries }, { data: rateRows }] = await Promise.all([
+      const [rosterRes, ratesRes] = await Promise.all([
         supabase
           .from("roster_entries")
           .select("date, staff_id, shift_hours, is_off, leave_type, attendance(actual_hours, status)")
@@ -76,6 +80,10 @@ export default function WagesVsTurnoverPage() {
           .from("staff_rates")
           .select("staff_id, hourly_rate, effective_from, effective_to"),
       ]);
+      if (rosterRes.error) throw new Error(`Roster: ${rosterRes.error.message}`);
+      if (ratesRes.error) throw new Error(`Rates: ${ratesRes.error.message}`);
+      const rosterEntries = rosterRes.data;
+      const rateRows = ratesRes.data;
 
       // Per-staff effective-dated rate lookup (falls back to the default).
       const ratesByStaff = new Map<
@@ -177,7 +185,17 @@ export default function WagesVsTurnoverPage() {
           };
         });
       setData(rows);
-      setLoading(false);
+      } catch (err) {
+        // Surface failures instead of leaving the page stuck/unresponsive
+        // with the real cause buried in the console.
+        console.error("Wages vs Turnover failed to load:", err);
+        setData([]);
+        setRunError(
+          err instanceof Error ? err.message : "Failed to load report data."
+        );
+      } finally {
+        setLoading(false);
+      }
     },
     [supabase]
   );
@@ -194,6 +212,11 @@ export default function WagesVsTurnoverPage() {
 
   return (
     <ReportWrapper title="Wages vs Turnover" onRun={handleRun} onExportCSV={handleExportCSV}>
+      {runError && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          Failed to load report: {runError}
+        </div>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
         <StatCard label="Average Labour %" value={`${avgLabour.toFixed(1)}%`} icon={<TrendingUp className="h-5 w-5" />} />
         <StatCard label="Total Wages" value={formatCurrency(totalWages)} icon={<DollarSign className="h-5 w-5" />} />
