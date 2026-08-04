@@ -239,19 +239,22 @@ export default function PayrollExportPage() {
               `${re.branch_id}|${re.shift_start.slice(0, 5)}|${re.shift_end.slice(0, 5)}`
             );
 
-          const attendanceArr = re.attendance;
+          // attendance has UNIQUE(roster_entry_id), so PostgREST returns the
+          // embed as a single OBJECT (or null), not an array — normalise.
+          // Without this the .length guards silently skipped attendance and
+          // confirmed hours were never applied.
+          const attRaw = re.attendance as
+            | { actual_hours: number | null; status: string | null }[]
+            | { actual_hours: number | null; status: string | null }
+            | null;
+          const attendanceArr = Array.isArray(attRaw) ? attRaw : attRaw ? [attRaw] : [];
           const isLeave =
             isPaidLeaveRow ||
             isLeaveTemplateShift ||
-            (attendanceArr &&
-              attendanceArr.length > 0 &&
-              attendanceArr.some((a) => a.status === "absent" || a.status === "leave"));
+            attendanceArr.some((a) => a.status === "absent" || a.status === "leave");
 
           // Prefer attendance actual_hours if confirmed, else roster shift_hours
-          const confirmedAttendance =
-            attendanceArr && attendanceArr.length > 0
-              ? attendanceArr.find((a) => a.status === "confirmed")
-              : null;
+          const confirmedAttendance = attendanceArr.find((a) => a.status === "confirmed");
           const hours = confirmedAttendance?.actual_hours ?? re.shift_hours ?? 0;
 
           const dayType = classifyDay(re.date);

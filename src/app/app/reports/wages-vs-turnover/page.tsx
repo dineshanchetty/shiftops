@@ -143,7 +143,10 @@ export default function WagesVsTurnoverPage() {
         // Driver paid via the cashup for this date — skip roster hours.
         if (driverStaffDates.has(`${re.date}|${re.staff_id}`)) continue;
 
-        const att = re.attendance ?? [];
+        // attendance has UNIQUE(roster_entry_id), so PostgREST returns the
+        // embed as a single OBJECT (or null), not an array — normalise.
+        const attRaw = re.attendance;
+        const att = Array.isArray(attRaw) ? attRaw : attRaw ? [attRaw] : [];
         const isLeave =
           re.leave_type === "paid_leave" ||
           re.leave_type === "sick" ||
