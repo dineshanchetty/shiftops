@@ -6,6 +6,7 @@ import {
   ReportWrapper,
   type ReportFilters,
 } from "@/components/reports/report-wrapper";
+import { ReportPermissionGate } from "@/components/reports/report-permission-gate";
 import { formatCurrency, cn } from "@/lib/utils";
 import { generateCSV, triggerDownload } from "@/lib/report-utils";
 
@@ -292,199 +293,201 @@ export default function GlobalWagesPage() {
   }
 
   return (
-    <ReportWrapper
-      title="Global Wages Comparison Report"
-      onRun={handleRun}
-      onExportCSV={handleExportCSV}
-    >
-      {/* Dual-period controls */}
-      <div className="flex flex-wrap items-end gap-4 mb-6 print:hidden">
-        <div className="flex items-end gap-2 p-3 border border-base-200 rounded-lg bg-surface">
+    <ReportPermissionGate permission="reports.payroll">
+  <ReportWrapper
+        title="Global Wages Comparison Report"
+        onRun={handleRun}
+        onExportCSV={handleExportCSV}
+      >
+        {/* Dual-period controls */}
+        <div className="flex flex-wrap items-end gap-4 mb-6 print:hidden">
+          <div className="flex items-end gap-2 p-3 border border-base-200 rounded-lg bg-surface">
+            <div>
+              <label className="text-xs font-medium text-base-500 block mb-1">
+                Left Period From
+              </label>
+              <input
+                type="date"
+                value={leftFrom}
+                onChange={(e) => setLeftFrom(e.target.value)}
+                className="h-9 px-2 rounded border border-base-200 bg-surface text-sm text-base-900"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-base-500 block mb-1">
+                To
+              </label>
+              <input
+                type="date"
+                value={leftTo}
+                onChange={(e) => setLeftTo(e.target.value)}
+                className="h-9 px-2 rounded border border-base-200 bg-surface text-sm text-base-900"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-end gap-2 p-3 border border-base-200 rounded-lg bg-surface">
+            <div>
+              <label className="text-xs font-medium text-base-500 block mb-1">
+                Right Period From
+              </label>
+              <input
+                type="date"
+                value={rightFrom}
+                onChange={(e) => setRightFrom(e.target.value)}
+                className="h-9 px-2 rounded border border-base-200 bg-surface text-sm text-base-900"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-base-500 block mb-1">
+                To
+              </label>
+              <input
+                type="date"
+                value={rightTo}
+                onChange={(e) => setRightTo(e.target.value)}
+                className="h-9 px-2 rounded border border-base-200 bg-surface text-sm text-base-900"
+              />
+            </div>
+          </div>
+
           <div>
             <label className="text-xs font-medium text-base-500 block mb-1">
-              Left Period From
+              Columns
             </label>
-            <input
-              type="date"
-              value={leftFrom}
-              onChange={(e) => setLeftFrom(e.target.value)}
+            <select
               className="h-9 px-2 rounded border border-base-200 bg-surface text-sm text-base-900"
-            />
+              defaultValue="actual"
+            >
+              <option value="actual">Actual</option>
+            </select>
           </div>
+
           <div>
             <label className="text-xs font-medium text-base-500 block mb-1">
-              To
+              Values
             </label>
-            <input
-              type="date"
-              value={leftTo}
-              onChange={(e) => setLeftTo(e.target.value)}
+            <select
               className="h-9 px-2 rounded border border-base-200 bg-surface text-sm text-base-900"
-            />
+              defaultValue="amounts"
+            >
+              <option value="amounts">Amounts</option>
+            </select>
           </div>
         </div>
 
-        <div className="flex items-end gap-2 p-3 border border-base-200 rounded-lg bg-surface">
-          <div>
-            <label className="text-xs font-medium text-base-500 block mb-1">
-              Right Period From
-            </label>
-            <input
-              type="date"
-              value={rightFrom}
-              onChange={(e) => setRightFrom(e.target.value)}
-              className="h-9 px-2 rounded border border-base-200 bg-surface text-sm text-base-900"
-            />
+        {/* Loading */}
+        {loading && (
+          <div className="space-y-2">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="h-10 bg-surface-2 rounded animate-pulse" />
+            ))}
           </div>
-          <div>
-            <label className="text-xs font-medium text-base-500 block mb-1">
-              To
-            </label>
-            <input
-              type="date"
-              value={rightTo}
-              onChange={(e) => setRightTo(e.target.value)}
-              className="h-9 px-2 rounded border border-base-200 bg-surface text-sm text-base-900"
-            />
+        )}
+
+        {/* Empty */}
+        {!loading && data.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-16 text-base-400">
+            <Scale className="h-12 w-12 mb-3" />
+            <p className="text-sm">No data for selected periods</p>
           </div>
-        </div>
+        )}
 
-        <div>
-          <label className="text-xs font-medium text-base-500 block mb-1">
-            Columns
-          </label>
-          <select
-            className="h-9 px-2 rounded border border-base-200 bg-surface text-sm text-base-900"
-            defaultValue="actual"
-          >
-            <option value="actual">Actual</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="text-xs font-medium text-base-500 block mb-1">
-            Values
-          </label>
-          <select
-            className="h-9 px-2 rounded border border-base-200 bg-surface text-sm text-base-900"
-            defaultValue="amounts"
-          >
-            <option value="amounts">Amounts</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Loading */}
-      {loading && (
-        <div className="space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="h-10 bg-surface-2 rounded animate-pulse" />
-          ))}
-        </div>
-      )}
-
-      {/* Empty */}
-      {!loading && data.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 text-base-400">
-          <Scale className="h-12 w-12 mb-3" />
-          <p className="text-sm">No data for selected periods</p>
-        </div>
-      )}
-
-      {/* Table */}
-      {!loading && data.length > 0 && (
-        <div className="overflow-x-auto rounded-lg border border-base-200">
-          <table className="w-full text-sm">
-            <thead>
-              {/* Group header row */}
-              <tr className="bg-surface-2">
-                <th
-                  rowSpan={2}
-                  className="px-4 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 text-left border-r border-base-200 sticky top-0 bg-surface-2"
-                >
-                  Branch
-                </th>
-                <th
-                  colSpan={6}
-                  className="px-3 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 text-center border-r border-base-200 bg-surface-2"
-                >
-                  Actual Amounts From {leftFrom} to {leftTo}
-                </th>
-                <th
-                  colSpan={6}
-                  className="px-3 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 text-center border-r border-base-200 bg-surface-2"
-                >
-                  Actual Amounts From {rightFrom} to {rightTo}
-                </th>
-                <th
-                  rowSpan={2}
-                  className="px-3 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 text-right sticky top-0 bg-surface-2"
-                >
-                  Difference
-                </th>
-              </tr>
-              {/* Sub-header row */}
-              <tr className="bg-surface-2 border-t border-base-200">
-                {wageHeaders.map((h) => (
+        {/* Table */}
+        {!loading && data.length > 0 && (
+          <div className="overflow-x-auto rounded-lg border border-base-200">
+            <table className="w-full text-sm">
+              <thead>
+                {/* Group header row */}
+                <tr className="bg-surface-2">
                   <th
-                    key={`l-${h}`}
-                    className="px-3 py-1 text-xs uppercase tracking-wide font-semibold text-base-400 text-right bg-surface-2"
+                    rowSpan={2}
+                    className="px-4 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 text-left border-r border-base-200 sticky top-0 bg-surface-2"
                   >
-                    {h}
+                    Branch
                   </th>
-                ))}
-                {wageHeaders.map((h) => (
                   <th
-                    key={`r-${h}`}
-                    className="px-3 py-1 text-xs uppercase tracking-wide font-semibold text-base-400 text-right bg-surface-2 border-l border-base-200"
+                    colSpan={6}
+                    className="px-3 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 text-center border-r border-base-200 bg-surface-2"
                   >
-                    {h}
+                    Actual Amounts From {leftFrom} to {leftTo}
                   </th>
+                  <th
+                    colSpan={6}
+                    className="px-3 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 text-center border-r border-base-200 bg-surface-2"
+                  >
+                    Actual Amounts From {rightFrom} to {rightTo}
+                  </th>
+                  <th
+                    rowSpan={2}
+                    className="px-3 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 text-right sticky top-0 bg-surface-2"
+                  >
+                    Difference
+                  </th>
+                </tr>
+                {/* Sub-header row */}
+                <tr className="bg-surface-2 border-t border-base-200">
+                  {wageHeaders.map((h) => (
+                    <th
+                      key={`l-${h}`}
+                      className="px-3 py-1 text-xs uppercase tracking-wide font-semibold text-base-400 text-right bg-surface-2"
+                    >
+                      {h}
+                    </th>
+                  ))}
+                  {wageHeaders.map((h) => (
+                    <th
+                      key={`r-${h}`}
+                      className="px-3 py-1 text-xs uppercase tracking-wide font-semibold text-base-400 text-right bg-surface-2 border-l border-base-200"
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data.map((row) => (
+                  <tr
+                    key={row.branchId}
+                    className="border-b border-base-200 hover:bg-surface-2 transition-colors"
+                  >
+                    <td className="px-4 py-2 text-base-900 font-medium border-r border-base-200">
+                      {row.branchName}
+                    </td>
+                    {renderBreakdownCells(row.left)}
+                    {renderBreakdownCells(row.right, true)}
+                    <td
+                      className={cn(
+                        "px-3 py-2 text-right font-mono font-semibold border-l border-base-200",
+                        row.difference < 0 ? "text-red-600" : "text-base-900"
+                      )}
+                    >
+                      {formatCurrency(row.difference)}
+                    </td>
+                  </tr>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.map((row) => (
-                <tr
-                  key={row.branchId}
-                  className="border-b border-base-200 hover:bg-surface-2 transition-colors"
-                >
-                  <td className="px-4 py-2 text-base-900 font-medium border-r border-base-200">
-                    {row.branchName}
+              </tbody>
+              <tfoot>
+                <tr className="bg-surface-2 font-semibold">
+                  <td className="px-4 py-2 text-base-900 border-r border-base-200">
+                    Total
                   </td>
-                  {renderBreakdownCells(row.left)}
-                  {renderBreakdownCells(row.right, true)}
+                  {renderBreakdownCells(totLeft)}
+                  {renderBreakdownCells(totRight, true)}
                   <td
                     className={cn(
                       "px-3 py-2 text-right font-mono font-semibold border-l border-base-200",
-                      row.difference < 0 ? "text-red-600" : "text-base-900"
+                      totalDifference < 0 ? "text-red-600" : "text-base-900"
                     )}
                   >
-                    {formatCurrency(row.difference)}
+                    {formatCurrency(totalDifference)}
                   </td>
                 </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="bg-surface-2 font-semibold">
-                <td className="px-4 py-2 text-base-900 border-r border-base-200">
-                  Total
-                </td>
-                {renderBreakdownCells(totLeft)}
-                {renderBreakdownCells(totRight, true)}
-                <td
-                  className={cn(
-                    "px-3 py-2 text-right font-mono font-semibold border-l border-base-200",
-                    totalDifference < 0 ? "text-red-600" : "text-base-900"
-                  )}
-                >
-                  {formatCurrency(totalDifference)}
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      )}
-    </ReportWrapper>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </ReportWrapper>
+    </ReportPermissionGate>
   );
 }

@@ -1,5 +1,8 @@
+"use client";
+
 import Link from "next/link";
 import { PageShell } from "@/components/layout/page-shell";
+import { useAuth } from "@/lib/auth-context";
 import {
   Receipt,
   CalendarDays,
@@ -41,6 +44,7 @@ const reports = [
     description:
       "Labour cost as a percentage of turnover with target tracking.",
     href: "/app/reports/wages-vs-turnover",
+    permission: "reports.payroll",
     icon: TrendingUp,
   },
   {
@@ -90,6 +94,7 @@ const reports = [
     description:
       "Export staff hours and wages for Sage Pastel.",
     href: "/app/reports/payroll-export",
+    permission: "reports.payroll",
     icon: FileSpreadsheet,
   },
   {
@@ -125,6 +130,7 @@ const reports = [
     description:
       "Scheduled, actual, and budget hours per staff with variance.",
     href: "/app/reports/wages-hours-budget",
+    permission: "reports.payroll",
     icon: Clock,
   },
   {
@@ -146,15 +152,23 @@ const reports = [
     description:
       "Multi-branch wage cost comparison against turnover targets.",
     href: "/app/reports/global-wages",
+    permission: "reports.payroll",
     icon: Scale,
   },
 ] as const;
 
 export default function ReportsPage() {
+  const { hasPermission } = useAuth();
+  // Hide reports whose permission the user's role doesn't hold
+  // (e.g. payroll reports are reports.payroll — Admin/Ops only).
+  const visibleReports = reports.filter(
+    (r) => !("permission" in r) || hasPermission(r.permission as string)
+  );
+
   return (
     <PageShell title="Reports">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {reports.map((report) => {
+        {visibleReports.map((report) => {
           const Icon = report.icon;
           return (
             <Link

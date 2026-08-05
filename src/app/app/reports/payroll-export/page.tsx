@@ -6,6 +6,7 @@ import {
   ReportWrapper,
   type ReportFilters,
 } from "@/components/reports/report-wrapper";
+import { ReportPermissionGate } from "@/components/reports/report-permission-gate";
 import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency, cn } from "@/lib/utils";
 import { generateCSV, triggerDownload } from "@/lib/report-utils";
@@ -572,194 +573,196 @@ export default function PayrollExportPage() {
   const totalWages = data.reduce((s, r) => s + r.total_wages, 0);
 
   return (
-    <ReportWrapper
-      title="Sage Pastel Payroll Export"
-      onRun={handleRun}
-      onExportCSV={handleExportCSV}
-      onExportPDF={handleExportPDF}
-    >
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <StatCard
-          label="Total Staff"
-          value={totalStaff}
-          icon={<Users className="h-5 w-5" />}
-        />
-        <StatCard
-          label="Total Hours"
-          value={totalHours.toFixed(1)}
-          icon={<Clock className="h-5 w-5" />}
-        />
-        <StatCard
-          label="Total Wages"
-          value={formatCurrency(totalWages)}
-          icon={<DollarSign className="h-5 w-5" />}
-        />
-        <StatCard
-          label="Avg Hours/Staff"
-          value={totalStaff > 0 ? (totalHours / totalStaff).toFixed(1) : "0"}
-          icon={<FileSpreadsheet className="h-5 w-5" />}
-        />
-      </div>
-
-      {/* Loading skeleton */}
-      {loading && (
-        <div className="space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="h-10 bg-surface-2 rounded animate-pulse" />
-          ))}
+    <ReportPermissionGate permission="reports.payroll">
+  <ReportWrapper
+        title="Sage Pastel Payroll Export"
+        onRun={handleRun}
+        onExportCSV={handleExportCSV}
+        onExportPDF={handleExportPDF}
+      >
+        {/* Summary cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          <StatCard
+            label="Total Staff"
+            value={totalStaff}
+            icon={<Users className="h-5 w-5" />}
+          />
+          <StatCard
+            label="Total Hours"
+            value={totalHours.toFixed(1)}
+            icon={<Clock className="h-5 w-5" />}
+          />
+          <StatCard
+            label="Total Wages"
+            value={formatCurrency(totalWages)}
+            icon={<DollarSign className="h-5 w-5" />}
+          />
+          <StatCard
+            label="Avg Hours/Staff"
+            value={totalStaff > 0 ? (totalHours / totalStaff).toFixed(1) : "0"}
+            icon={<FileSpreadsheet className="h-5 w-5" />}
+          />
         </div>
-      )}
 
-      {/* Empty state */}
-      {!loading && data.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 text-base-400">
-          <FileSpreadsheet className="h-12 w-12 mb-3" />
-          <p className="text-sm">No roster data for selected period</p>
-        </div>
-      )}
-
-      {!loading && data.length > 0 && (
-        <>
-          {/* Pastel export info */}
-          <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 mb-4 text-sm text-blue-800">
-            Preview below. Click <strong>CSV</strong> to export in Sage Pastel
-            Payroll import format.
+        {/* Loading skeleton */}
+        {loading && (
+          <div className="space-y-2">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="h-10 bg-surface-2 rounded animate-pulse" />
+            ))}
           </div>
+        )}
 
-          {/* Preview table */}
-          <div className="overflow-x-auto rounded-lg border border-base-200">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-surface-2">
-                  {[
-                    "Emp Code",
-                    "Surname",
-                    "First Name",
-                    "ID Number",
-                    "Position",
-                    "Total Hours",
-                    "Normal",
-                    "Sunday",
-                    "PH",
-                    "Leave",
-                    "Overtime",
-                    "Gross Wages",
-                    "Earnings Code",
-                  ].map((h) => (
-                    <th
-                      key={h}
-                      className={cn(
-                        "px-4 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 sticky top-0 bg-surface-2 whitespace-nowrap",
-                        [
-                          "Emp Code",
-                          "Surname",
-                          "First Name",
-                          "ID Number",
-                          "Position",
-                          "PH",
-                          "Earnings Code",
-                        ].includes(h)
-                          ? "text-left"
-                          : "text-right"
-                      )}
+        {/* Empty state */}
+        {!loading && data.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-16 text-base-400">
+            <FileSpreadsheet className="h-12 w-12 mb-3" />
+            <p className="text-sm">No roster data for selected period</p>
+          </div>
+        )}
+
+        {!loading && data.length > 0 && (
+          <>
+            {/* Pastel export info */}
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 mb-4 text-sm text-blue-800">
+              Preview below. Click <strong>CSV</strong> to export in Sage Pastel
+              Payroll import format.
+            </div>
+
+            {/* Preview table */}
+            <div className="overflow-x-auto rounded-lg border border-base-200">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-surface-2">
+                    {[
+                      "Emp Code",
+                      "Surname",
+                      "First Name",
+                      "ID Number",
+                      "Position",
+                      "Total Hours",
+                      "Normal",
+                      "Sunday",
+                      "PH",
+                      "Leave",
+                      "Overtime",
+                      "Gross Wages",
+                      "Earnings Code",
+                    ].map((h) => (
+                      <th
+                        key={h}
+                        className={cn(
+                          "px-4 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 sticky top-0 bg-surface-2 whitespace-nowrap",
+                          [
+                            "Emp Code",
+                            "Surname",
+                            "First Name",
+                            "ID Number",
+                            "Position",
+                            "PH",
+                            "Earnings Code",
+                          ].includes(h)
+                            ? "text-left"
+                            : "text-right"
+                        )}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.map((row) => (
+                    <tr
+                      key={row.staff_id}
+                      className="border-b border-base-200 hover:bg-surface-2 transition-colors"
                     >
-                      {h}
-                    </th>
+                      <td className="px-4 py-2 text-base-900 font-mono text-sm">
+                        {row.emp_code}
+                      </td>
+                      <td className="px-4 py-2 text-base-900 font-medium">
+                        {row.surname}
+                      </td>
+                      <td className="px-4 py-2 text-base-900">
+                        {row.first_name}
+                      </td>
+                      <td className="px-4 py-2 text-base-500 font-mono text-xs">
+                        {row.id_number || "-"}
+                      </td>
+                      <td className="px-4 py-2 text-base-500 text-xs">
+                        {row.position || "-"}
+                      </td>
+                      <td className="px-4 py-2 text-right font-mono text-base-900">
+                        {row.total_hours.toFixed(1)}
+                      </td>
+                      <td className="px-4 py-2 text-right font-mono text-base-900">
+                        {row.normal_hours.toFixed(1)}
+                      </td>
+                      <td className="px-4 py-2 text-right font-mono text-base-900">
+                        {row.sunday_hours.toFixed(1)}
+                      </td>
+                      <td className="px-4 py-2 text-right font-mono text-base-900">
+                        {row.public_holiday_hours.toFixed(1)}
+                      </td>
+                      <td className="px-4 py-2 text-right font-mono text-blue-700">
+                        {row.leave_hours.toFixed(1)}
+                      </td>
+                      <td className="px-4 py-2 text-right font-mono text-base-900">
+                        {row.overtime_hours.toFixed(1)}
+                      </td>
+                      <td className="px-4 py-2 text-right font-mono text-base-900">
+                        {formatCurrency(row.total_wages)}
+                      </td>
+                      <td className="px-4 py-2 text-base-500 font-mono text-xs">
+                        {row.earnings_code} ({row.earnings_desc})
+                      </td>
+                    </tr>
                   ))}
-                </tr>
-              </thead>
-              <tbody>
-                {data.map((row) => (
-                  <tr
-                    key={row.staff_id}
-                    className="border-b border-base-200 hover:bg-surface-2 transition-colors"
-                  >
-                    <td className="px-4 py-2 text-base-900 font-mono text-sm">
-                      {row.emp_code}
-                    </td>
-                    <td className="px-4 py-2 text-base-900 font-medium">
-                      {row.surname}
-                    </td>
-                    <td className="px-4 py-2 text-base-900">
-                      {row.first_name}
-                    </td>
-                    <td className="px-4 py-2 text-base-500 font-mono text-xs">
-                      {row.id_number || "-"}
-                    </td>
-                    <td className="px-4 py-2 text-base-500 text-xs">
-                      {row.position || "-"}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-surface-2 font-semibold">
+                    <td className="px-4 py-2 text-base-900" colSpan={5}>
+                      Totals ({data.length} staff)
                     </td>
                     <td className="px-4 py-2 text-right font-mono text-base-900">
-                      {row.total_hours.toFixed(1)}
+                      {totalHours.toFixed(1)}
                     </td>
                     <td className="px-4 py-2 text-right font-mono text-base-900">
-                      {row.normal_hours.toFixed(1)}
+                      {data
+                        .reduce((s, r) => s + r.normal_hours, 0)
+                        .toFixed(1)}
                     </td>
                     <td className="px-4 py-2 text-right font-mono text-base-900">
-                      {row.sunday_hours.toFixed(1)}
+                      {data
+                        .reduce((s, r) => s + r.sunday_hours, 0)
+                        .toFixed(1)}
                     </td>
                     <td className="px-4 py-2 text-right font-mono text-base-900">
-                      {row.public_holiday_hours.toFixed(1)}
+                      {data
+                        .reduce((s, r) => s + r.public_holiday_hours, 0)
+                        .toFixed(1)}
                     </td>
                     <td className="px-4 py-2 text-right font-mono text-blue-700">
-                      {row.leave_hours.toFixed(1)}
+                      {data
+                        .reduce((s, r) => s + r.leave_hours, 0)
+                        .toFixed(1)}
                     </td>
                     <td className="px-4 py-2 text-right font-mono text-base-900">
-                      {row.overtime_hours.toFixed(1)}
+                      {data
+                        .reduce((s, r) => s + r.overtime_hours, 0)
+                        .toFixed(1)}
                     </td>
                     <td className="px-4 py-2 text-right font-mono text-base-900">
-                      {formatCurrency(row.total_wages)}
+                      {formatCurrency(totalWages)}
                     </td>
-                    <td className="px-4 py-2 text-base-500 font-mono text-xs">
-                      {row.earnings_code} ({row.earnings_desc})
-                    </td>
+                    <td className="px-4 py-2" />
                   </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="bg-surface-2 font-semibold">
-                  <td className="px-4 py-2 text-base-900" colSpan={5}>
-                    Totals ({data.length} staff)
-                  </td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">
-                    {totalHours.toFixed(1)}
-                  </td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">
-                    {data
-                      .reduce((s, r) => s + r.normal_hours, 0)
-                      .toFixed(1)}
-                  </td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">
-                    {data
-                      .reduce((s, r) => s + r.sunday_hours, 0)
-                      .toFixed(1)}
-                  </td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">
-                    {data
-                      .reduce((s, r) => s + r.public_holiday_hours, 0)
-                      .toFixed(1)}
-                  </td>
-                  <td className="px-4 py-2 text-right font-mono text-blue-700">
-                    {data
-                      .reduce((s, r) => s + r.leave_hours, 0)
-                      .toFixed(1)}
-                  </td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">
-                    {data
-                      .reduce((s, r) => s + r.overtime_hours, 0)
-                      .toFixed(1)}
-                  </td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">
-                    {formatCurrency(totalWages)}
-                  </td>
-                  <td className="px-4 py-2" />
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </>
-      )}
-    </ReportWrapper>
+                </tfoot>
+              </table>
+            </div>
+          </>
+        )}
+      </ReportWrapper>
+    </ReportPermissionGate>
   );
 }

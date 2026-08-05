@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { ReportWrapper, type ReportFilters } from "@/components/reports/report-wrapper";
+import { ReportPermissionGate } from "@/components/reports/report-permission-gate";
 import { StatCard } from "@/components/ui/stat-card";
 import { formatCurrency, formatDate, cn } from "@/lib/utils";
 import { generateCSV, triggerDownload } from "@/lib/report-utils";
@@ -214,68 +215,70 @@ export default function WagesVsTurnoverPage() {
   const avgLabour = totalTurnover > 0 ? (totalWages / totalTurnover) * 100 : 0;
 
   return (
-    <ReportWrapper title="Wages vs Turnover" onRun={handleRun} onExportCSV={handleExportCSV}>
-      {runError && (
-        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          Failed to load report: {runError}
+    <ReportPermissionGate permission="reports.payroll">
+  <ReportWrapper title="Wages vs Turnover" onRun={handleRun} onExportCSV={handleExportCSV}>
+        {runError && (
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            Failed to load report: {runError}
+          </div>
+        )}
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+          <StatCard label="Average Labour %" value={`${avgLabour.toFixed(1)}%`} icon={<TrendingUp className="h-5 w-5" />} />
+          <StatCard label="Total Wages" value={formatCurrency(totalWages)} icon={<DollarSign className="h-5 w-5" />} />
+          <StatCard label="Total Turnover (Nett)" value={formatCurrency(totalTurnover)} icon={<Receipt className="h-5 w-5" />} />
         </div>
-      )}
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-        <StatCard label="Average Labour %" value={`${avgLabour.toFixed(1)}%`} icon={<TrendingUp className="h-5 w-5" />} />
-        <StatCard label="Total Wages" value={formatCurrency(totalWages)} icon={<DollarSign className="h-5 w-5" />} />
-        <StatCard label="Total Turnover (Nett)" value={formatCurrency(totalTurnover)} icon={<Receipt className="h-5 w-5" />} />
-      </div>
 
-      {loading && (
-        <div className="space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="h-10 bg-surface-2 rounded animate-pulse" />
-          ))}
-        </div>
-      )}
+        {loading && (
+          <div className="space-y-2">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="h-10 bg-surface-2 rounded animate-pulse" />
+            ))}
+          </div>
+        )}
 
-      {!loading && data.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 text-base-400">
-          <CalendarDays className="h-12 w-12 mb-3" />
-          <p className="text-sm">No data for selected period</p>
-        </div>
-      )}
+        {!loading && data.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-16 text-base-400">
+            <CalendarDays className="h-12 w-12 mb-3" />
+            <p className="text-sm">No data for selected period</p>
+          </div>
+        )}
 
-      {!loading && data.length > 0 && (
-        <div className="overflow-x-auto rounded-lg border border-base-200">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-surface-2">
-                {["Date", "Turnover (Nett)", "Total Wages", "Labour %", "Target %", "Over/Under"].map((h) => (
-                  <th key={h} className={cn("px-4 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 sticky top-0 bg-surface-2", h === "Date" ? "text-left" : "text-right")}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {data.map((row) => (
-                <tr key={row.date} className={cn("border-b border-base-200 hover:bg-surface-2 transition-colors", row.labour_pct > LABOUR_TARGET && "bg-red-50")}>
-                  <td className="px-4 py-2 text-base-900">{formatDate(row.date)}</td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(row.turnover)}</td>
-                  <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(row.total_wages)}</td>
-                  <td className={cn("px-4 py-2 text-right font-mono font-semibold", row.labour_pct > LABOUR_TARGET ? "text-red-600" : "text-green-600")}>{row.labour_pct.toFixed(1)}%</td>
-                  <td className="px-4 py-2 text-right font-mono text-base-400">{row.target_pct}%</td>
-                  <td className={cn("px-4 py-2 text-right font-mono font-semibold", row.over_under > 0 ? "text-red-600" : "text-green-600")}>{row.over_under > 0 ? "+" : ""}{row.over_under.toFixed(1)}%</td>
+        {!loading && data.length > 0 && (
+          <div className="overflow-x-auto rounded-lg border border-base-200">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-surface-2">
+                  {["Date", "Turnover (Nett)", "Total Wages", "Labour %", "Target %", "Over/Under"].map((h) => (
+                    <th key={h} className={cn("px-4 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 sticky top-0 bg-surface-2", h === "Date" ? "text-left" : "text-right")}>{h}</th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="bg-surface-2 font-semibold">
-                <td className="px-4 py-2 text-base-900">Totals</td>
-                <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(totalTurnover)}</td>
-                <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(totalWages)}</td>
-                <td className={cn("px-4 py-2 text-right font-mono font-semibold", avgLabour > LABOUR_TARGET ? "text-red-600" : "text-green-600")}>{avgLabour.toFixed(1)}%</td>
-                <td className="px-4 py-2 text-right font-mono text-base-400">{LABOUR_TARGET}%</td>
-                <td className={cn("px-4 py-2 text-right font-mono font-semibold", avgLabour - LABOUR_TARGET > 0 ? "text-red-600" : "text-green-600")}>{avgLabour - LABOUR_TARGET > 0 ? "+" : ""}{(avgLabour - LABOUR_TARGET).toFixed(1)}%</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      )}
-    </ReportWrapper>
+              </thead>
+              <tbody>
+                {data.map((row) => (
+                  <tr key={row.date} className={cn("border-b border-base-200 hover:bg-surface-2 transition-colors", row.labour_pct > LABOUR_TARGET && "bg-red-50")}>
+                    <td className="px-4 py-2 text-base-900">{formatDate(row.date)}</td>
+                    <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(row.turnover)}</td>
+                    <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(row.total_wages)}</td>
+                    <td className={cn("px-4 py-2 text-right font-mono font-semibold", row.labour_pct > LABOUR_TARGET ? "text-red-600" : "text-green-600")}>{row.labour_pct.toFixed(1)}%</td>
+                    <td className="px-4 py-2 text-right font-mono text-base-400">{row.target_pct}%</td>
+                    <td className={cn("px-4 py-2 text-right font-mono font-semibold", row.over_under > 0 ? "text-red-600" : "text-green-600")}>{row.over_under > 0 ? "+" : ""}{row.over_under.toFixed(1)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="bg-surface-2 font-semibold">
+                  <td className="px-4 py-2 text-base-900">Totals</td>
+                  <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(totalTurnover)}</td>
+                  <td className="px-4 py-2 text-right font-mono text-base-900">{formatCurrency(totalWages)}</td>
+                  <td className={cn("px-4 py-2 text-right font-mono font-semibold", avgLabour > LABOUR_TARGET ? "text-red-600" : "text-green-600")}>{avgLabour.toFixed(1)}%</td>
+                  <td className="px-4 py-2 text-right font-mono text-base-400">{LABOUR_TARGET}%</td>
+                  <td className={cn("px-4 py-2 text-right font-mono font-semibold", avgLabour - LABOUR_TARGET > 0 ? "text-red-600" : "text-green-600")}>{avgLabour - LABOUR_TARGET > 0 ? "+" : ""}{(avgLabour - LABOUR_TARGET).toFixed(1)}%</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </ReportWrapper>
+    </ReportPermissionGate>
   );
 }

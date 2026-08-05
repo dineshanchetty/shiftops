@@ -6,6 +6,7 @@ import {
   ReportWrapper,
   type ReportFilters,
 } from "@/components/reports/report-wrapper";
+import { ReportPermissionGate } from "@/components/reports/report-permission-gate";
 import { formatCurrency, cn } from "@/lib/utils";
 import { generateCSV, triggerDownload } from "@/lib/report-utils";
 import { Clock } from "lucide-react";
@@ -324,288 +325,290 @@ export default function WagesHoursBudgetPage() {
   ];
 
   return (
-    <ReportWrapper
-      title="Wages Hours Report: Actual vs Budget"
-      onRun={handleRun}
-      onExportCSV={handleExportCSV}
-    >
-      {/* Loading */}
-      {loading && (
-        <div className="space-y-2">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="h-10 bg-surface-2 rounded animate-pulse" />
-          ))}
-        </div>
-      )}
+    <ReportPermissionGate permission="reports.payroll">
+  <ReportWrapper
+        title="Wages Hours Report: Actual vs Budget"
+        onRun={handleRun}
+        onExportCSV={handleExportCSV}
+      >
+        {/* Loading */}
+        {loading && (
+          <div className="space-y-2">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="h-10 bg-surface-2 rounded animate-pulse" />
+            ))}
+          </div>
+        )}
 
-      {/* Empty */}
-      {!loading && data.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 text-base-400">
-          <Clock className="h-12 w-12 mb-3" />
-          <p className="text-sm">No data for selected period</p>
-        </div>
-      )}
+        {/* Empty */}
+        {!loading && data.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-16 text-base-400">
+            <Clock className="h-12 w-12 mb-3" />
+            <p className="text-sm">No data for selected period</p>
+          </div>
+        )}
 
-      {/* Table */}
-      {!loading && data.length > 0 && (
-        <>
-          <div className="overflow-x-auto rounded-lg border border-base-200">
-            <table className="w-full text-sm whitespace-nowrap">
-              <thead>
-                <tr className="bg-surface-2">
-                  {HEADERS.map((h) => (
-                    <th
-                      key={h.label}
-                      className={cn(
-                        "px-3 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 sticky top-0 bg-surface-2",
-                        h.align === "left" ? "text-left" : "text-right"
-                      )}
-                    >
-                      {h.label}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {grouped.map((group) => {
-                  const subBudgetH = group.rows.reduce(
-                    (s, r) => s + r.budgetHours,
-                    0
-                  );
-                  const subBudgetA = group.rows.reduce(
-                    (s, r) => s + r.budgetAmount,
-                    0
-                  );
-                  const subActualH = group.rows.reduce(
-                    (s, r) => s + r.actualHours,
-                    0
-                  );
-                  const subActualA = group.rows.reduce(
-                    (s, r) => s + r.actualAmount,
-                    0
-                  );
-                  const subDiffH = group.rows.reduce(
-                    (s, r) => s + r.diffHours,
-                    0
-                  );
-                  const subDiffA = group.rows.reduce(
-                    (s, r) => s + r.diffAmount,
-                    0
-                  );
+        {/* Table */}
+        {!loading && data.length > 0 && (
+          <>
+            <div className="overflow-x-auto rounded-lg border border-base-200">
+              <table className="w-full text-sm whitespace-nowrap">
+                <thead>
+                  <tr className="bg-surface-2">
+                    {HEADERS.map((h) => (
+                      <th
+                        key={h.label}
+                        className={cn(
+                          "px-3 py-2 text-xs uppercase tracking-wide font-semibold text-base-400 sticky top-0 bg-surface-2",
+                          h.align === "left" ? "text-left" : "text-right"
+                        )}
+                      >
+                        {h.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {grouped.map((group) => {
+                    const subBudgetH = group.rows.reduce(
+                      (s, r) => s + r.budgetHours,
+                      0
+                    );
+                    const subBudgetA = group.rows.reduce(
+                      (s, r) => s + r.budgetAmount,
+                      0
+                    );
+                    const subActualH = group.rows.reduce(
+                      (s, r) => s + r.actualHours,
+                      0
+                    );
+                    const subActualA = group.rows.reduce(
+                      (s, r) => s + r.actualAmount,
+                      0
+                    );
+                    const subDiffH = group.rows.reduce(
+                      (s, r) => s + r.diffHours,
+                      0
+                    );
+                    const subDiffA = group.rows.reduce(
+                      (s, r) => s + r.diffAmount,
+                      0
+                    );
 
-                  return (
-                    <React.Fragment key={group.label}>
-                      {/* Group header */}
-                      <tr className="bg-base-100">
-                        <td
-                          colSpan={7}
-                          className="px-3 py-2 text-xs uppercase tracking-wide font-bold text-base-600"
-                        >
-                          {group.label}
-                        </td>
-                      </tr>
-
-                      {/* Staff rows */}
-                      {group.rows.map((r) => (
-                        <tr
-                          key={r.staffId}
-                          className="border-b border-base-200 hover:bg-surface-2 transition-colors"
-                        >
-                          <td className="px-3 py-1.5 text-base-900 font-medium pl-6">
-                            {r.name}
-                          </td>
-                          <td className="px-3 py-1.5 text-right font-mono text-base-900">
-                            {r.budgetHours.toFixed(1)}
-                          </td>
-                          <td className="px-3 py-1.5 text-right font-mono text-base-900">
-                            {formatCurrency(r.budgetAmount)}
-                          </td>
-                          <td className="px-3 py-1.5 text-right font-mono text-base-900">
-                            {r.actualHours.toFixed(1)}
-                          </td>
-                          <td className="px-3 py-1.5 text-right font-mono text-base-900">
-                            {formatCurrency(r.actualAmount)}
-                          </td>
+                    return (
+                      <React.Fragment key={group.label}>
+                        {/* Group header */}
+                        <tr className="bg-base-100">
                           <td
-                            className={cn(
-                              "px-3 py-1.5 text-right font-mono font-semibold",
-                              r.diffHours < 0
-                                ? "text-red-600"
-                                : "text-base-900"
-                            )}
+                            colSpan={7}
+                            className="px-3 py-2 text-xs uppercase tracking-wide font-bold text-base-600"
                           >
-                            {fmtHoursNeg(r.diffHours)}
-                          </td>
-                          <td
-                            className={cn(
-                              "px-3 py-1.5 text-right font-mono font-semibold",
-                              r.diffAmount < 0
-                                ? "text-red-600"
-                                : "text-base-900"
-                            )}
-                          >
-                            {fmtNeg(r.diffAmount)}
+                            {group.label}
                           </td>
                         </tr>
-                      ))}
 
-                      {/* Sub Total */}
-                      <tr className="bg-surface-2 border-b border-base-300">
-                        <td className="px-3 py-1.5 text-base-700 font-semibold text-sm">
-                          Sub Total
-                        </td>
-                        <td className="px-3 py-1.5 text-right font-mono font-semibold text-base-900">
-                          {subBudgetH.toFixed(1)}
-                        </td>
-                        <td className="px-3 py-1.5 text-right font-mono font-semibold text-base-900">
-                          {formatCurrency(subBudgetA)}
-                        </td>
-                        <td className="px-3 py-1.5 text-right font-mono font-semibold text-base-900">
-                          {subActualH.toFixed(1)}
-                        </td>
-                        <td className="px-3 py-1.5 text-right font-mono font-semibold text-base-900">
-                          {formatCurrency(subActualA)}
-                        </td>
-                        <td
-                          className={cn(
-                            "px-3 py-1.5 text-right font-mono font-semibold",
-                            subDiffH < 0 ? "text-red-600" : "text-base-900"
-                          )}
-                        >
-                          {fmtHoursNeg(subDiffH)}
-                        </td>
-                        <td
-                          className={cn(
-                            "px-3 py-1.5 text-right font-mono font-semibold",
-                            subDiffA < 0 ? "text-red-600" : "text-base-900"
-                          )}
-                        >
-                          {fmtNeg(subDiffA)}
-                        </td>
-                      </tr>
-                    </React.Fragment>
-                  );
-                })}
-              </tbody>
-              <tfoot>
-                <tr className="bg-surface-2 font-bold">
-                  <td className="px-3 py-2 text-base-900">Grand Total</td>
-                  <td className="px-3 py-2 text-right font-mono text-base-900">
-                    {grandTotals.budgetHours.toFixed(1)}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono text-base-900">
-                    {formatCurrency(grandTotals.budgetAmount)}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono text-base-900">
-                    {grandTotals.actualHours.toFixed(1)}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono text-base-900">
-                    {formatCurrency(grandTotals.actualAmount)}
-                  </td>
-                  <td
+                        {/* Staff rows */}
+                        {group.rows.map((r) => (
+                          <tr
+                            key={r.staffId}
+                            className="border-b border-base-200 hover:bg-surface-2 transition-colors"
+                          >
+                            <td className="px-3 py-1.5 text-base-900 font-medium pl-6">
+                              {r.name}
+                            </td>
+                            <td className="px-3 py-1.5 text-right font-mono text-base-900">
+                              {r.budgetHours.toFixed(1)}
+                            </td>
+                            <td className="px-3 py-1.5 text-right font-mono text-base-900">
+                              {formatCurrency(r.budgetAmount)}
+                            </td>
+                            <td className="px-3 py-1.5 text-right font-mono text-base-900">
+                              {r.actualHours.toFixed(1)}
+                            </td>
+                            <td className="px-3 py-1.5 text-right font-mono text-base-900">
+                              {formatCurrency(r.actualAmount)}
+                            </td>
+                            <td
+                              className={cn(
+                                "px-3 py-1.5 text-right font-mono font-semibold",
+                                r.diffHours < 0
+                                  ? "text-red-600"
+                                  : "text-base-900"
+                              )}
+                            >
+                              {fmtHoursNeg(r.diffHours)}
+                            </td>
+                            <td
+                              className={cn(
+                                "px-3 py-1.5 text-right font-mono font-semibold",
+                                r.diffAmount < 0
+                                  ? "text-red-600"
+                                  : "text-base-900"
+                              )}
+                            >
+                              {fmtNeg(r.diffAmount)}
+                            </td>
+                          </tr>
+                        ))}
+
+                        {/* Sub Total */}
+                        <tr className="bg-surface-2 border-b border-base-300">
+                          <td className="px-3 py-1.5 text-base-700 font-semibold text-sm">
+                            Sub Total
+                          </td>
+                          <td className="px-3 py-1.5 text-right font-mono font-semibold text-base-900">
+                            {subBudgetH.toFixed(1)}
+                          </td>
+                          <td className="px-3 py-1.5 text-right font-mono font-semibold text-base-900">
+                            {formatCurrency(subBudgetA)}
+                          </td>
+                          <td className="px-3 py-1.5 text-right font-mono font-semibold text-base-900">
+                            {subActualH.toFixed(1)}
+                          </td>
+                          <td className="px-3 py-1.5 text-right font-mono font-semibold text-base-900">
+                            {formatCurrency(subActualA)}
+                          </td>
+                          <td
+                            className={cn(
+                              "px-3 py-1.5 text-right font-mono font-semibold",
+                              subDiffH < 0 ? "text-red-600" : "text-base-900"
+                            )}
+                          >
+                            {fmtHoursNeg(subDiffH)}
+                          </td>
+                          <td
+                            className={cn(
+                              "px-3 py-1.5 text-right font-mono font-semibold",
+                              subDiffA < 0 ? "text-red-600" : "text-base-900"
+                            )}
+                          >
+                            {fmtNeg(subDiffA)}
+                          </td>
+                        </tr>
+                      </React.Fragment>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-surface-2 font-bold">
+                    <td className="px-3 py-2 text-base-900">Grand Total</td>
+                    <td className="px-3 py-2 text-right font-mono text-base-900">
+                      {grandTotals.budgetHours.toFixed(1)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-base-900">
+                      {formatCurrency(grandTotals.budgetAmount)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-base-900">
+                      {grandTotals.actualHours.toFixed(1)}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-base-900">
+                      {formatCurrency(grandTotals.actualAmount)}
+                    </td>
+                    <td
+                      className={cn(
+                        "px-3 py-2 text-right font-mono font-bold",
+                        grandTotals.diffHours < 0
+                          ? "text-red-600"
+                          : "text-base-900"
+                      )}
+                    >
+                      {fmtHoursNeg(grandTotals.diffHours)}
+                    </td>
+                    <td
+                      className={cn(
+                        "px-3 py-2 text-right font-mono font-bold",
+                        grandTotals.diffAmount < 0
+                          ? "text-red-600"
+                          : "text-base-900"
+                      )}
+                    >
+                      {fmtNeg(grandTotals.diffAmount)}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+
+            {/* Summary stats block */}
+            <div className="mt-6 rounded-lg border border-base-200 bg-surface p-4">
+              <h3 className="text-sm font-semibold text-base-700 mb-3 uppercase tracking-wide">
+                Summary
+              </h3>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-x-8 gap-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-base-500">Actual Wage Total</span>
+                  <span className="font-mono text-base-900">
+                    {formatCurrency(summaryStats.actualWageTotal)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-base-500">Budget Wage Total</span>
+                  <span className="font-mono text-base-900">
+                    {formatCurrency(summaryStats.budgetWageTotal)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-base-500">Wage Difference</span>
+                  <span
                     className={cn(
-                      "px-3 py-2 text-right font-mono font-bold",
-                      grandTotals.diffHours < 0
-                        ? "text-red-600"
-                        : "text-base-900"
+                      "font-mono font-semibold",
+                      wageDiff < 0 ? "text-red-600" : "text-base-900"
                     )}
                   >
-                    {fmtHoursNeg(grandTotals.diffHours)}
-                  </td>
-                  <td
+                    {fmtNeg(wageDiff)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-base-500">Previous Year Nett T/O</span>
+                  <span className="font-mono text-base-900">
+                    {formatCurrency(summaryStats.prevYearNettTO)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-base-500">Actual Nett Turnover</span>
+                  <span className="font-mono text-base-900">
+                    {formatCurrency(summaryStats.actualNettTO)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-base-500">Budget Nett Turnover</span>
+                  <span className="font-mono text-base-900">
+                    {formatCurrency(summaryStats.budgetNettTO)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-base-500">Turnover Difference</span>
+                  <span
                     className={cn(
-                      "px-3 py-2 text-right font-mono font-bold",
-                      grandTotals.diffAmount < 0
-                        ? "text-red-600"
-                        : "text-base-900"
+                      "font-mono font-semibold",
+                      toDiff < 0 ? "text-red-600" : "text-base-900"
                     )}
                   >
-                    {fmtNeg(grandTotals.diffAmount)}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-
-          {/* Summary stats block */}
-          <div className="mt-6 rounded-lg border border-base-200 bg-surface p-4">
-            <h3 className="text-sm font-semibold text-base-700 mb-3 uppercase tracking-wide">
-              Summary
-            </h3>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-x-8 gap-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-base-500">Actual Wage Total</span>
-                <span className="font-mono text-base-900">
-                  {formatCurrency(summaryStats.actualWageTotal)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-base-500">Budget Wage Total</span>
-                <span className="font-mono text-base-900">
-                  {formatCurrency(summaryStats.budgetWageTotal)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-base-500">Wage Difference</span>
-                <span
-                  className={cn(
-                    "font-mono font-semibold",
-                    wageDiff < 0 ? "text-red-600" : "text-base-900"
-                  )}
-                >
-                  {fmtNeg(wageDiff)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-base-500">Previous Year Nett T/O</span>
-                <span className="font-mono text-base-900">
-                  {formatCurrency(summaryStats.prevYearNettTO)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-base-500">Actual Nett Turnover</span>
-                <span className="font-mono text-base-900">
-                  {formatCurrency(summaryStats.actualNettTO)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-base-500">Budget Nett Turnover</span>
-                <span className="font-mono text-base-900">
-                  {formatCurrency(summaryStats.budgetNettTO)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-base-500">Turnover Difference</span>
-                <span
-                  className={cn(
-                    "font-mono font-semibold",
-                    toDiff < 0 ? "text-red-600" : "text-base-900"
-                  )}
-                >
-                  {fmtNeg(toDiff)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-base-500">
-                  Actual Wages % Of Turnover
-                </span>
-                <span className="font-mono text-base-900">
-                  {actualWagesPct.toFixed(2)}%
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-base-500">
-                  Budget Wages % Of Turnover
-                </span>
-                <span className="font-mono text-base-900">
-                  {budgetWagesPct.toFixed(2)}%
-                </span>
+                    {fmtNeg(toDiff)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-base-500">
+                    Actual Wages % Of Turnover
+                  </span>
+                  <span className="font-mono text-base-900">
+                    {actualWagesPct.toFixed(2)}%
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-base-500">
+                    Budget Wages % Of Turnover
+                  </span>
+                  <span className="font-mono text-base-900">
+                    {budgetWagesPct.toFixed(2)}%
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
-        </>
-      )}
-    </ReportWrapper>
+          </>
+        )}
+      </ReportWrapper>
+    </ReportPermissionGate>
   );
 }
 
