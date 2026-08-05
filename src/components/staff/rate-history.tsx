@@ -25,7 +25,17 @@ interface StaffRate {
   effective_to: string | null;
   created_at: string;
   created_by: string | null;
+  /** 'hourly' | 'monthly_retainer' (drivers may later use per_delivery / fixed_daily).
+   *  For monthly_retainer, hourly_rate holds the MONTHLY amount. */
+  pay_model: string;
 }
+
+const PAY_MODEL_LABELS: Record<string, string> = {
+  hourly: "/hour",
+  monthly_retainer: "/month (retainer)",
+  per_delivery: "/delivery",
+  fixed_daily: "/day",
+};
 
 interface RateHistoryProps {
   staffId: string;
@@ -55,6 +65,7 @@ export function RateHistory({ staffId, tenantId }: RateHistoryProps) {
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [newRate, setNewRate] = useState("");
+  const [newPayModel, setNewPayModel] = useState<"hourly" | "monthly_retainer">("hourly");
   const [newEffective, setNewEffective] = useState(todayDateStr());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -115,7 +126,8 @@ export function RateHistory({ staffId, tenantId }: RateHistoryProps) {
       const { error: insertErr } = await (supabase as any).from("staff_rates").insert({
         staff_id: staffId,
         tenant_id: tenantId,
-        hourly_rate: rate,
+        hourly_rate: rate, // for monthly_retainer this is the MONTHLY amount
+        pay_model: newPayModel,
         effective_from: newEffective,
         effective_to: null,
         created_by: user?.id ?? null,
@@ -164,8 +176,17 @@ export function RateHistory({ staffId, tenantId }: RateHistoryProps) {
             <div>
               <div className="text-2xl font-bold font-mono text-base-900">
                 {current ? formatZAR(current.hourly_rate) : "—"}
-                {current && <span className="text-sm font-normal text-base-400 ml-1">/hr</span>}
+                {current && (
+                  <span className="text-sm font-normal text-base-400 ml-1">
+                    {PAY_MODEL_LABELS[current.pay_model] ?? "/hour"}
+                  </span>
+                )}
               </div>
+              {current?.pay_model === "monthly_retainer" && (
+                <span className="inline-block mt-1 text-[10px] font-bold uppercase tracking-wider text-purple-700 bg-purple-100 rounded px-1.5 py-0.5">
+                  Monthly retainer — excluded from hourly payroll
+                </span>
+              )}
               {current && (
                 <div className="text-xs text-base-500 mt-1">
                   Effective from {new Date(current.effective_from + "T00:00:00").toLocaleDateString("en-ZA")}
@@ -181,15 +202,32 @@ export function RateHistory({ staffId, tenantId }: RateHistoryProps) {
           {showAdd && (
             <div className="mt-4 pt-4 border-t border-base-200">
               <div className="flex flex-wrap items-end gap-2">
+                <div>
+                  <label className="block text-[10px] text-base-400 mb-1">Pay model</label>
+                  <select
+                    value={newPayModel}
+                    onChange={(e) =>
+                      setNewPayModel(e.target.value as "hourly" | "monthly_retainer")
+                    }
+                    className="h-9 rounded-lg border border-base-200 bg-white px-2 text-sm"
+                  >
+                    <option value="hourly">Hourly rate</option>
+                    <option value="monthly_retainer">Monthly retainer</option>
+                  </select>
+                </div>
                 <div className="flex-1 min-w-[120px]">
-                  <label className="block text-[10px] text-base-400 mb-1">New rate (ZAR/hour)</label>
+                  <label className="block text-[10px] text-base-400 mb-1">
+                    {newPayModel === "monthly_retainer"
+                      ? "Retainer (ZAR/month)"
+                      : "New rate (ZAR/hour)"}
+                  </label>
                   <input
                     type="number"
                     step="0.01"
                     min="0"
                     value={newRate}
                     onChange={(e) => setNewRate(e.target.value)}
-                    placeholder="e.g. 45.00"
+                    placeholder={newPayModel === "monthly_retainer" ? "e.g. 12000.00" : "e.g. 45.00"}
                     className="h-9 w-full rounded-lg border border-base-200 bg-white px-2 text-sm font-mono"
                   />
                 </div>
@@ -226,7 +264,10 @@ export function RateHistory({ staffId, tenantId }: RateHistoryProps) {
                     <span className="font-mono">
                       {new Date(r.effective_from + "T00:00:00").toLocaleDateString("en-ZA")} → {r.effective_to ? new Date(r.effective_to + "T00:00:00").toLocaleDateString("en-ZA") : "—"}
                     </span>
-                    <span className="font-mono font-semibold">{formatZAR(r.hourly_rate)}/hr</span>
+                    <span className="font-mono font-semibold">
+                      {formatZAR(r.hourly_rate)}
+                      {PAY_MODEL_LABELS[r.pay_model] ?? "/hour"}
+                    </span>
                   </div>
                 ))}
               </div>

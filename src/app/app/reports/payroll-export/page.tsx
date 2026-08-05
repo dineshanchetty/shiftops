@@ -34,6 +34,8 @@ interface PayrollRow {
   ph_amount: number;
   leave_amount: number;
   overtime_amount: number;
+  /** Pro-rated monthly retainer for salaried staff (managers); 0 for hourly staff. */
+  retainer_amount: number;
   total_wages: number;
   earnings_code: string;
   earnings_desc: string;
@@ -130,30 +132,57 @@ export default function PayrollExportPage() {
 
       // Per-staff effective-dated rates (Rate History / Bulk Rate Update).
       // Resolved per worked day so mid-period rate changes pay correctly.
+      // pay_model matters: monthly_retainer staff (managers) are excluded
+      // from hourly lines and paid via a pro-rated retainer line instead.
       const { data: rateRows } = await supabase
         .from("staff_rates")
-        .select("staff_id, hourly_rate, effective_from, effective_to");
+        .select("staff_id, hourly_rate, effective_from, effective_to, pay_model");
       const ratesByStaff = new Map<
         string,
-        { rate: number; from: string; to: string | null }[]
+        { rate: number; model: string; from: string; to: string | null }[]
       >();
       for (const r of rateRows ?? []) {
         const arr = ratesByStaff.get(r.staff_id) ?? [];
         arr.push({
           rate: Number(r.hourly_rate),
+          model: (r as { pay_model?: string }).pay_model ?? "hourly",
           from: r.effective_from,
           to: r.effective_to,
         });
         ratesByStaff.set(r.staff_id, arr);
       }
-      const rateFor = (staffId: string, date: string): number => {
+      const rateInfoFor = (
+        staffId: string,
+        date: string
+      ): { rate: number; model: string } => {
         const arr = ratesByStaff.get(staffId);
         if (arr) {
           for (const r of arr) {
-            if (r.from <= date && (r.to === null || r.to >= date)) return r.rate;
+            if (r.from <= date && (r.to === null || r.to >= date)) {
+              return { rate: r.rate, model: r.model };
+            }
           }
         }
-        return DEFAULT_HOURLY_RATE;
+        return { rate: DEFAULT_HOURLY_RATE, model: "hourly" };
+      };
+      // Pro-rate a monthly retainer across the report period: for each month
+      // the period overlaps, pay (overlap days / days in month) × monthly.
+      // A full calendar month pays exactly the full retainer.
+      const proratedRetainer = (monthly: number, from: string, to: string): number => {
+        let total = 0;
+        const start = new Date(from + "T00:00:00");
+        const end = new Date(to + "T00:00:00");
+        let cur = new Date(start.getFullYear(), start.getMonth(), 1);
+        while (cur <= end) {
+          const monthEnd = new Date(cur.getFullYear(), cur.getMonth() + 1, 0);
+          const overlapStart = start > cur ? start : cur;
+          const overlapEnd = end < monthEnd ? end : monthEnd;
+          const overlapDays =
+            Math.round((overlapEnd.getTime() - overlapStart.getTime()) / 86400000) + 1;
+          total += monthly * (overlapDays / monthEnd.getDate());
+          cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+        }
+        return total;
       };
 
       // Shift templates whose name says "leave" — stores roster paid leave as
@@ -265,7 +294,12 @@ export default function PayrollExportPage() {
           const regularHours = hours - overtime;
 
           // Rate effective on THIS day for THIS staff member.
-          const rate = rateFor(re.staff_id, re.date);
+          const rateInfo = rateInfoFor(re.staff_id, re.date);
+          // Monthly-retainer staff (managers) are salaried — their roster
+          // entries never earn hourly wages; they're paid via the retainer
+          // line appended below.
+          if (rateInfo.model === "monthly_retainer") continue;
+          const rate = rateInfo.rate;
 
           let agg = byStaff.get(re.staff_id);
           if (!agg) {
@@ -348,11 +382,52 @@ export default function PayrollExportPage() {
             ph_amount: Math.round(s.ph_amount * 100) / 100,
             leave_amount: Math.round(s.leave_amount * 100) / 100,
             overtime_amount: Math.round(s.overtime_amount * 100) / 100,
+            retainer_amount: 0,
             total_wages: Math.round(totalWages * 100) / 100,
             earnings_code: "1000",
             earnings_desc: "Normal",
           };
         });
+
+        // Append salaried (monthly retainer) staff — typically managers who
+        // aren't paid from roster hours. Pro-rated for partial periods.
+        const { data: retainerCandidates } = await supabase
+          .from("staff")
+          .select("id, first_name, last_name, id_number, position_id")
+          .in("branch_id", f.branchIds)
+          .eq("active", true);
+        for (const s of retainerCandidates ?? []) {
+          const info = rateInfoFor(s.id as string, f.dateTo);
+          if (info.model !== "monthly_retainer") continue;
+          if (byStaff.has(s.id as string)) continue; // shouldn't happen; safety
+          const amount = Math.round(proratedRetainer(info.rate, f.dateFrom, f.dateTo) * 100) / 100;
+          if (amount <= 0) continue;
+          const firstName = s.first_name as string;
+          const lastName = s.last_name as string;
+          rows.push({
+            staff_id: s.id as string,
+            emp_code: (lastName.slice(0, 3) + firstName.slice(0, 2)).toUpperCase(),
+            surname: lastName,
+            first_name: firstName,
+            id_number: (s.id_number as string | null) ?? "",
+            position: s.position_id ? posMap.get(s.position_id) ?? "" : "",
+            total_hours: 0,
+            normal_hours: 0,
+            sunday_hours: 0,
+            public_holiday_hours: 0,
+            leave_hours: 0,
+            overtime_hours: 0,
+            normal_amount: 0,
+            sunday_amount: 0,
+            ph_amount: 0,
+            leave_amount: 0,
+            overtime_amount: 0,
+            retainer_amount: amount,
+            total_wages: amount,
+            earnings_code: "1005",
+            earnings_desc: "Retainer",
+          });
+        }
 
         rows.sort((a, b) => a.surname.localeCompare(b.surname));
         setData(rows);
@@ -557,6 +632,13 @@ export default function PayrollExportPage() {
         rows.push([
           r.emp_code, r.surname, r.first_name, r.id_number,
           "3000", "Overtime", r.overtime_hours, r.overtime_amount,
+        ]);
+      }
+      // 1005 = Monthly retainer (salaried staff — no hours)
+      if (r.retainer_amount > 0) {
+        rows.push([
+          r.emp_code, r.surname, r.first_name, r.id_number,
+          "1005", "Monthly Retainer", 0, r.retainer_amount,
         ]);
       }
     }

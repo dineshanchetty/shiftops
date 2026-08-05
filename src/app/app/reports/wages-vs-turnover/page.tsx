@@ -79,7 +79,7 @@ export default function WagesVsTurnoverPage() {
           .lte("date", f.dateTo),
         supabase
           .from("staff_rates")
-          .select("staff_id, hourly_rate, effective_from, effective_to"),
+          .select("staff_id, hourly_rate, effective_from, effective_to, pay_model"),
       ]);
       if (rosterRes.error) throw new Error(`Roster: ${rosterRes.error.message}`);
       if (ratesRes.error) throw new Error(`Rates: ${ratesRes.error.message}`);
@@ -89,21 +89,46 @@ export default function WagesVsTurnoverPage() {
       // Per-staff effective-dated rate lookup (falls back to the default).
       const ratesByStaff = new Map<
         string,
-        { rate: number; from: string; to: string | null }[]
+        { rate: number; model: string; from: string; to: string | null }[]
       >();
       for (const r of rateRows ?? []) {
         const arr = ratesByStaff.get(r.staff_id) ?? [];
-        arr.push({ rate: Number(r.hourly_rate), from: r.effective_from, to: r.effective_to });
+        arr.push({
+          rate: Number(r.hourly_rate),
+          model: (r as { pay_model?: string }).pay_model ?? "hourly",
+          from: r.effective_from,
+          to: r.effective_to,
+        });
         ratesByStaff.set(r.staff_id, arr);
       }
-      const rateFor = (staffId: string, date: string): number => {
+      const rateInfoFor = (staffId: string, date: string): { rate: number; model: string } => {
         const arr = ratesByStaff.get(staffId);
         if (arr) {
           for (const r of arr) {
-            if (r.from <= date && (r.to === null || r.to >= date)) return r.rate;
+            if (r.from <= date && (r.to === null || r.to >= date)) {
+              return { rate: r.rate, model: r.model };
+            }
           }
         }
-        return DEFAULT_HOURLY_RATE;
+        return { rate: DEFAULT_HOURLY_RATE, model: "hourly" };
+      };
+
+      // Salaried (monthly retainer) staff in these branches — their cost is
+      // allocated per day as monthly / days-in-month, independent of roster.
+      const { data: branchStaff } = await supabase
+        .from("staff")
+        .select("id")
+        .in("branch_id", f.branchIds)
+        .eq("active", true);
+      const retainerDailyFor = (date: string): number => {
+        let total = 0;
+        const d = new Date(date + "T00:00:00");
+        const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+        for (const s of branchStaff ?? []) {
+          const info = rateInfoFor(s.id as string, date);
+          if (info.model === "monthly_retainer") total += info.rate / daysInMonth;
+        }
+        return total;
       };
 
       // Pass 1 — cashups: sum turnover + driver wages per date, and record
@@ -154,7 +179,11 @@ export default function WagesVsTurnoverPage() {
           att.some((a) => a.status === "absent" || a.status === "leave");
         const confirmed = att.find((a) => a.status === "confirmed");
         const hours = confirmed?.actual_hours ?? re.shift_hours ?? 0;
-        const rate = rateFor(re.staff_id, re.date);
+        const rateInfo = rateInfoFor(re.staff_id, re.date);
+        // Retainer staff (managers) are salaried — cost is allocated daily
+        // via retainerDailyFor, never from roster hours.
+        if (rateInfo.model === "monthly_retainer") continue;
+        const rate = rateInfo.rate;
 
         let amount: number;
         if (isLeave) {
@@ -177,7 +206,9 @@ export default function WagesVsTurnoverPage() {
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([date, turnover]) => {
           const totalWages =
-            (driverWagesByDate.get(date) ?? 0) + (rosterWagesByDate.get(date) ?? 0);
+            (driverWagesByDate.get(date) ?? 0) +
+            (rosterWagesByDate.get(date) ?? 0) +
+            retainerDailyFor(date);
           const pct = turnover > 0 ? (totalWages / turnover) * 100 : 0;
           return {
             date,
